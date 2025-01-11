@@ -1,8 +1,12 @@
 {
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "rust-trade",
+  "version": "0.1.0",
   "identifier": "com.rust-trade.dev",
   "build": {
-    "beforeBuildCommand": "npm run build",
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "cd ../frontend && npm run dev",
+    "beforeBuildCommand": "cd ../frontend && npm run build",
+    "devUrl": "http://localhost:3000",
     "frontendDist": "../frontend/out"
   },
   "app": {
