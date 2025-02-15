@@ -8,6 +8,68 @@ A quantitative trading system written in Rust
 Tauri 2.0 is a framework for building lightweight, secure desktop applications using web technologies and Rust. It provides a minimal footprint by leveraging the OS's webview instead of bundling a heavy runtime, offering better performance, security, and native API integration.
 
 ## Overview
+
+```bash
+rust-trade/
+├── src-tauri/                     # Desktop Application Backend
+│   ├── src/
+│   │   ├── main.rs               # Tauri application entry
+│   │   ├── commands.rs           # Command handlers
+│   │   └── state.rs              # Application state management
+│   ├── Cargo.toml
+│   └── tauri.conf.json
+│
+├── frontend/                      # Frontend Interface
+│   ├── src/
+│   │   ├── app/
+│   │   │   ├── layout.tsx        # Main layout
+│   │   │   ├── page.tsx          # Home page
+│   │   │   ├── trading/          # Trading interface
+│   │   │   ├── backtest/         # Backtesting interface
+│   │   │   └── settings/         # Settings page
+│   │   └── components/
+│   │       ├── charts/           # Trading charts
+│   │       └── layout/           # Layout components
+│   ├── package.json
+│   └── next.config.ts
+│
+├── trading-core/                  # Core Trading Library
+│   ├── src/
+│   │   ├── lib.rs                # Library entry point
+│   │   ├── config.rs             # Configuration management
+│   │   ├── services/
+│   │   │   ├── mod.rs
+│   │   │   └── exchange/         # Exchange services
+│   │   │       ├── mod.rs
+│   │   │       ├── types.rs      # Exchange types & traits
+│   │   │       ├── binance.rs    # Binance implementation
+│   │   │       └── collector.rs   # Market data collector
+│   │   │
+│   │   ├── backtest/             # Backtesting system
+│   │   │   ├── engine.rs         # Backtesting engine
+│   │   │   ├── strategy.rs       # Strategy implementations
+│   │   │   └── types.rs          # Backtesting types
+│   │   │
+│   │   ├── data/                 # Data management
+│   │   │   ├── mod.rs
+│   │   │   ├── database.rs       # Database connection
+│   │   │   └── market_data.rs    # Market data management
+│   │   │
+│   │   └── api/                  # API layer
+│   │       ├── mod.rs
+│   │       ├── types.rs          # API types
+│   │       └── rest.rs           # REST endpoints
+│   │
+│   └── Cargo.toml
+│
+├── config/                        # Configuration
+│   ├── default.toml              # Default configuration
+│   └── production.toml           # Production configuration
+│
+└── migrations/                    # Database migrations
+    └── market_data.sql           # Market data schema
+```
+
 rust-trade is a quantitative trading system that combines modern trading strategies with artificial intelligence. This software is released under the GNU General Public License v3. In this basic version, I have defined various interfaces. I will expand the functions I hope to achieve in the next step (allowing customers to run their own strategies in this system and see the results of the strategies. At the same time, mint high-quality strategies into NFTs and put them in the blockchain world)
 
 Copyright (C) 2024 Harrison
