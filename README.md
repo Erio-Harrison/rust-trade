@@ -53,10 +53,6 @@ rust-trade/
 
 ```
 
-rust-trade is a quantitative trading system that combines modern trading strategies with artificial intelligence. This software is released under the GNU General Public License v3.
-
-Copyright (C) 2024 Harrison
-
 ## How to run
 
 Run in the root directory:
