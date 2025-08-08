@@ -1,5 +1,4 @@
 [database]
-url = "postgres://harrison:huhaoren@127.0.0.1:5432/trade"
 max_connections = 5
 min_connections = 1
 max_lifetime = 1800

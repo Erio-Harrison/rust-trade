@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use config::{Config, ConfigError, Environment, File};
+use config::{Config, ConfigError, File};
 
 #[derive(Debug, Deserialize)]
 pub struct Database {
@@ -23,15 +23,15 @@ pub struct Settings {
 impl Settings {
     pub fn new() -> Result<Self, ConfigError> {
         let run_mode = std::env::var("RUN_MODE").unwrap_or_else(|_| "development".into());
-
-        let s = Config::builder()
-            .add_source(File::with_name("../config/default"))
-            .add_source(File::with_name(&format!("config/{}", run_mode)).required(false))
-            .add_source(Environment::with_prefix("APP"))
-            .build()?;
-
-        println!("Config content: {:?}", s);
         
+        let mut builder = Config::builder()
+            .add_source(File::with_name(&format!("../config/{}", run_mode)).required(true));
+
+        if let Ok(database_url) = std::env::var("DATABASE_URL") {
+            builder = builder.set_override("database.url", database_url)?;
+        }
+
+        let s = builder.build()?;
         s.try_deserialize()
     }
 }

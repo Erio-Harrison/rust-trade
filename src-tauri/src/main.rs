@@ -1,9 +1,3 @@
-// rust-trade: A quantitative trading system written in Rust
-// Copyright (C) 2024 Harrison
-//
-// This program is part of rust-trade and is released under the
-// GNU GPL v3 or later. See the LICENSE file for details.
-
 #![cfg_attr(
   all(not(debug_assertions), target_os = "windows"),
   windows_subsystem = "windows"
@@ -18,7 +12,7 @@ use state::AppState;
 fn main() {
     // 初始化日志，设置更详细的级别
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
+        .with_max_level(tracing::Level::INFO)
         .with_file(true)
         .with_line_number(true)
         .init();
