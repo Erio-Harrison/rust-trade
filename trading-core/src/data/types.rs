@@ -1,31 +1,192 @@
 use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use thiserror::Error;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+// =================================================================
+// Core data type: completely corresponds to the tick_data table structure
+// =================================================================
+
+/// Trading direction enumeration
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum TradeSide {
+    Buy,
+    Sell,
+}
+
+
+/// Standard trading data structure - corresponds one-to-one with the tick_data table fields
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TickData {
+    /// UTC timestamp, supports millisecond precision
     pub timestamp: DateTime<Utc>,
+
+    /// Trading pair, such as "BTCUSDT"
     pub symbol: String,
-    pub price: f64,
-    pub volume: f64,
-    pub side: String,
+
+    /// Trading price
+    pub price: Decimal,
+
+    /// Trading quantity
+    pub quantity: Decimal,
+
+    /// Trading direction
+    pub side: TradeSide,
+
+    /// Original transaction ID
     pub trade_id: String,
-    pub is_maker: bool,
+
+    /// Whether the buyer is the maker
+    pub is_buyer_maker: bool,
 }
 
-#[derive(Clone)]
-pub struct MarketDataManager {
-    pub pool: PgPool,
+impl TickData {
+    /// New TickData
+    pub fn new(
+        timestamp: DateTime<Utc>,
+        symbol: String,
+        price: Decimal,
+        quantity: Decimal,
+        side: TradeSide,
+        trade_id: String,
+        is_buyer_maker: bool,
+    ) -> Self {
+        Self {
+            timestamp,
+            symbol,
+            price,
+            quantity,
+            side,
+            trade_id,
+            is_buyer_maker,
+        }
+    }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct MarketDataPoint {
-    pub timestamp: DateTime<Utc>,
+// =================================================================
+// Helper Types
+// =================================================================
+
+/// Database statistics
+#[derive(Debug, Clone)]
+pub struct DbStats {
+    pub symbol: Option<String>,
+    pub total_records: u64,
+    pub earliest_timestamp: Option<DateTime<Utc>>,
+    pub latest_timestamp: Option<DateTime<Utc>>,
+}
+
+// =================================================================
+// TradeSide Implementation for Database Integration
+// =================================================================
+
+impl TradeSide {
+    /// Convert to database string representation
+    pub fn as_db_str(&self) -> &'static str {
+        match self {
+            TradeSide::Buy => "BUY",
+            TradeSide::Sell => "SELL",
+        }
+    }
+}
+
+// =================================================================
+// Query parameter type
+// =================================================================
+
+/// TickData Query parameters
+#[derive(Debug, Clone)]
+pub struct TickQuery {
     pub symbol: String,
-    pub price: f64,
-    pub volume: f64,
-    pub high: f64,
-    pub low: f64,
-    pub open: f64,
-    pub close: f64,
+    pub start_time: Option<DateTime<Utc>>,
+    pub end_time: Option<DateTime<Utc>>,
+    pub limit: Option<u32>,
+    pub trade_side: Option<TradeSide>,
+}
+
+impl TickQuery {
+    pub fn new(symbol: String) -> Self {
+        Self {
+            symbol,
+            start_time: None,
+            end_time: None,
+            limit: None,
+            trade_side: None,
+        }
+    }
+}
+
+// =================================================================
+// Error type definition
+// =================================================================
+
+#[derive(Error, Debug)]
+pub enum DataError {
+    #[error("Database error: {0}")]
+    Database(#[from] sqlx::Error),
+
+    #[error("Invalid data format: {0}")]
+    InvalidFormat(String),
+
+    #[error("Data not found: {0}")]
+    NotFound(String),
+
+    #[error("Validation error: {0}")]
+    Validation(String),
+
+    #[error("Serialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
+
+    #[error("Decimal conversion error: {0}")]
+    DecimalConversion(#[from] rust_decimal::Error),
+
+    #[error("Cache error: {0}")]
+    Cache(String),
+
+    #[error("Configuration error: {0}")]
+    Config(String),
+}
+
+pub type DataResult<T> = Result<T, DataError>;
+
+
+/// Backtest data information for user selection
+#[derive(Debug, Clone)]
+pub struct BacktestDataInfo {
+    pub total_records: u64,
+    pub symbols_count: u64,
+    pub earliest_time: Option<DateTime<Utc>>,
+    pub latest_time: Option<DateTime<Utc>>,
+    pub symbol_info: Vec<SymbolDataInfo>,
+}
+
+/// Per-symbol data information
+#[derive(Debug, Clone)]
+pub struct SymbolDataInfo {
+    pub symbol: String,
+    pub records_count: u64,
+    pub earliest_time: Option<DateTime<Utc>>,
+    pub latest_time: Option<DateTime<Utc>>,
+    pub min_price: Option<Decimal>,
+    pub max_price: Option<Decimal>,
+}
+
+impl BacktestDataInfo {
+    /// Get information for a specific symbol
+    pub fn get_symbol_info(&self, symbol: &str) -> Option<&SymbolDataInfo> {
+        self.symbol_info.iter().find(|info| info.symbol == symbol)
+    }
+    
+    /// Get available symbols
+    pub fn get_available_symbols(&self) -> Vec<String> {
+        self.symbol_info.iter().map(|info| info.symbol.clone()).collect()
+    }
+    
+    /// Check if has sufficient data for backtesting
+    pub fn has_sufficient_data(&self, symbol: &str, min_records: u64) -> bool {
+        self.get_symbol_info(symbol)
+            .map(|info| info.records_count >= min_records)
+            .unwrap_or(false)
+    }
 }

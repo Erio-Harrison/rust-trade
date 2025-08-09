@@ -1,87 +1,94 @@
-// services/exchange/types.rs
-use crate::data::types::MarketDataPoint;
+// =================================================================
+// exchange/types.rs - Data Structures
+// =================================================================
+
 use chrono::{DateTime, Utc};
-use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
-#[derive(Error, Debug)]
-pub enum ExchangeError {
-    #[error("API error: {0}")]
-    ApiError(String),
-    #[error("Rate limit exceeded")]
-    RateLimitExceeded,
-    #[error("Invalid symbol: {0}")]
-    InvalidSymbol(String),
-    #[error("Network error: {0}")]
-    NetworkError(String),
-    #[error("Authentication error: {0}")]
-    AuthError(String),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OrderBookLevel {
-    pub price: Decimal,
-    pub quantity: Decimal,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OrderBook {
+/// Parameters for querying historical trade data
+#[derive(Debug, Clone)]
+pub struct HistoricalTradeParams {
     pub symbol: String,
-    pub timestamp: DateTime<Utc>,
-    pub bids: Vec<OrderBookLevel>,
-    pub asks: Vec<OrderBookLevel>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Ticker {
-    pub symbol: String,
-    pub timestamp: DateTime<Utc>,
-    pub last_price: Decimal,
-    pub bid_price: Decimal,
-    pub ask_price: Decimal,
-    pub volume_24h: Decimal,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExchangeTrade {
-    pub symbol: String,
-    pub timestamp: DateTime<Utc>,
-    pub price: Decimal,
-    pub quantity: Decimal,
-    pub is_buyer_maker: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct RecentTradesQuery {
+    pub start_time: Option<DateTime<Utc>>,
+    pub end_time: Option<DateTime<Utc>>,
     pub limit: Option<u32>,
 }
 
-#[async_trait::async_trait]
-pub trait Exchange: Send + Sync {
-    /// 获取交易对的最新行情
-    async fn get_ticker(&self, symbol: &str) -> Result<Ticker, ExchangeError>;
+impl HistoricalTradeParams {
+    pub fn new(symbol: String) -> Self {
+        Self {
+            symbol: symbol.to_uppercase(),
+            start_time: None,
+            end_time: None,
+            limit: None,
+        }
+    }
     
-    /// 获取交易对的订单簿
-    async fn get_orderbook(&self, symbol: &str, limit: u32) -> Result<OrderBook, ExchangeError>;
+    pub fn with_time_range(mut self, start: DateTime<Utc>, end: DateTime<Utc>) -> Self {
+        self.start_time = Some(start);
+        self.end_time = Some(end);
+        self
+    }
     
-    /// 获取最近的成交记录
-    async fn get_recent_trades(&self, symbol: &str, limit: u32) -> Result<Vec<ExchangeTrade>, ExchangeError>;
+    pub fn with_limit(mut self, limit: u32) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+}
+
+/// Binance specific trade message format
+#[derive(Debug, Deserialize, Clone)]
+pub struct BinanceTradeMessage {
+    /// Symbol
+    #[serde(rename = "s")]
+    pub symbol: String,
     
-    /// 获取K线数据
-    async fn get_klines(
-        &self,
-        symbol: &str,
-        interval: &str,
-        start_time: Option<DateTime<Utc>>,
-        end_time: Option<DateTime<Utc>>,
-        limit: Option<u32>,
-    ) -> Result<Vec<MarketDataPoint>, ExchangeError>;
+    /// Trade ID
+    #[serde(rename = "t")]
+    pub trade_id: u64,
     
-    /// 订阅实时市场数据
-    async fn subscribe_market_data(
-        &self,
-        symbols: &[String],
-        callback: Box<dyn Fn(MarketDataPoint) + Send + Sync>,
-    ) -> Result<(), ExchangeError>;
+    /// Price
+    #[serde(rename = "p")]
+    pub price: String,
+    
+    /// Quantity
+    #[serde(rename = "q")]
+    pub quantity: String,
+    
+    /// Trade time
+    #[serde(rename = "T")]
+    pub trade_time: u64,
+    
+    /// Is the buyer the market maker?
+    #[serde(rename = "m")]
+    pub is_buyer_maker: bool,
+    
+}
+
+/// Binance WebSocket stream wrapper for combined streams
+#[derive(Debug, Deserialize)]
+pub struct BinanceStreamMessage {
+    /// Stream name (e.g., "btcusdt@trade")
+    pub stream: String,
+    
+    /// The actual trade data
+    pub data: BinanceTradeMessage,
+}
+
+/// Binance subscription message format
+#[derive(Debug, Serialize)]
+pub struct BinanceSubscribeMessage {
+    pub method: String,
+    pub params: Vec<String>,
+    pub id: u32,
+}
+
+impl BinanceSubscribeMessage {
+    pub fn new(streams: Vec<String>) -> Self {
+        Self {
+            method: "SUBSCRIBE".to_string(),
+            params: streams,
+            id: 1,
+        }
+    }
 }

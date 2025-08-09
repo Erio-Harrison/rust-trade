@@ -1,304 +1,373 @@
-use super::types::*;
-use crate::data::types::MarketDataPoint;
-use chrono::{DateTime, TimeZone, Utc};
-use reqwest::{Client, Url};
-use rust_decimal::Decimal;
-use serde_json::Value;
-use std::time::Duration;
-use tokio_tungstenite::connect_async;
-use tracing::{debug, error, info};
-use futures_util::{SinkExt, StreamExt};  
-use tokio_tungstenite::tungstenite::Message;  
+// =================================================================
+// exchange/binance.rs - Binance Exchange Implementation
+// =================================================================
 
-#[derive(Clone)]
-pub struct BinanceSpot {
-    client: Client,
-    base_url: Url,
-    //ws_url: Url,
-    api_key: Option<String>,
-    //api_secret: Option<String>,
+use async_trait::async_trait;
+use futures_util::{SinkExt, StreamExt};
+use serde_json::json;
+use std::time::Duration;
+use tokio::time::sleep;
+use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tracing::{debug, error, info, warn};
+
+use crate::data::types::TickData;
+use super::{
+    traits::Exchange,
+    types::{BinanceStreamMessage, BinanceSubscribeMessage, BinanceTradeMessage, HistoricalTradeParams},
+    errors::ExchangeError,
+    utils::{build_binance_trade_streams, convert_binance_to_tick_data},
+};
+
+// Constants
+const BINANCE_WS_URL: &str = "wss://stream.binance.com:9443/stream";
+const BINANCE_API_URL: &str = "https://api.binance.com";
+const RECONNECT_DELAY: Duration = Duration::from_secs(5);
+const PING_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Binance exchange implementation
+pub struct BinanceExchange {
+    ws_url: String,
+    api_url: String,
+    client: reqwest::Client,
 }
 
-impl BinanceSpot {
-    pub fn new(api_key: Option<String> /* api_secret: Option<String>*/) -> Self {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()
-            .expect("Failed to create HTTP client");
-            
+impl BinanceExchange {
+    /// Create a new Binance exchange instance
+    pub fn new() -> Self {
         Self {
-            client,
-            base_url: Url::parse("https://api.binance.com").unwrap(),
-            //ws_url: Url::parse("wss://stream.binance.com:9443").unwrap(),
-            api_key,
-            //api_secret,
+            ws_url: BINANCE_WS_URL.to_string(),
+            api_url: BINANCE_API_URL.to_string(),
+            client: reqwest::Client::new(),
         }
     }
-    
-    async fn make_request(&self, endpoint: &str, params: Option<Vec<(&str, String)>>) 
-        -> Result<Value, ExchangeError> {
-        let mut url = self.base_url.join(endpoint)
-            .map_err(|e| ExchangeError::NetworkError(e.to_string()))?;
+
+    /// Parse WebSocket message and extract trade data
+    fn parse_trade_message(&self, text: &str) -> Result<TickData, ExchangeError> {
+        // First try to parse as stream message (combined streams format)
+        if let Ok(stream_msg) = serde_json::from_str::<BinanceStreamMessage>(text) {
+            return convert_binance_to_tick_data(stream_msg.data);
+        }
         
-        if let Some(params) = params {
-            let mut query = url.query_pairs_mut();
-            for (key, value) in params {
-                query.append_pair(key, &value);
+        // Fallback: try to parse as direct trade message
+        if let Ok(trade_msg) = serde_json::from_str::<BinanceTradeMessage>(text) {
+            return convert_binance_to_tick_data(trade_msg);
+        }
+        
+        // Check if it's a subscription confirmation or other control message
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
+            if value.get("result").is_some() || value.get("id").is_some() {
+                // This is a subscription confirmation, not an error
+                debug!("Received subscription confirmation: {}", text);
+                return Err(ExchangeError::ParseError("Control message, not trade data".to_string()));
             }
         }
         
-        let mut request = self.client.get(url);
-        if let Some(api_key) = &self.api_key {
-            request = request.header("X-MBX-APIKEY", api_key);
-        }
-        
-        let response = request
-            .send()
-            .await
-            .map_err(|e| ExchangeError::NetworkError(e.to_string()))?;
-            
-        if !response.status().is_success() {
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(ExchangeError::ApiError(error_text));
-        }
-        
-        response.json::<Value>()
-            .await
-            .map_err(|e| ExchangeError::ApiError(e.to_string()))
-    }
-    
-    fn parse_decimal(value: &str) -> Result<Decimal, ExchangeError> {
-        value.parse()
-            .map_err(|_| ExchangeError::ApiError("Invalid decimal format".to_string()))
+        Err(ExchangeError::ParseError(format!("Unable to parse message: {}", text)))
     }
 
-    fn parse_ticker_message(&self, data: &serde_json::Value) -> Option<MarketDataPoint> {
-        // 提取必要的字段
-        let symbol = data.get("s")?.as_str()?;
-        let price = data.get("c")?.as_str()?;
-        let volume = data.get("v")?.as_str()?;
-        let high = data.get("h")?.as_str()?;
-        let low = data.get("l")?.as_str()?;
-        let open = data.get("o")?.as_str()?;
-
-        // 解析数据
-        Some(MarketDataPoint {
-            symbol: symbol.to_string(),
-            price: price.parse().ok()?,
-            volume: volume.parse().ok()?,
-            timestamp: Utc::now(),
-            high: high.parse().ok()?,
-            low: low.parse().ok()?,
-            open: open.parse().ok()?,
-            close: price.parse().ok()?,
-        })
-    }
-}
-
-#[async_trait::async_trait]
-impl Exchange for BinanceSpot {
-    async fn get_ticker(&self, symbol: &str) -> Result<Ticker, ExchangeError> {
-        let params = vec![("symbol", symbol.to_string())];
-        let data = self.make_request("/api/v3/ticker/24hr", Some(params)).await?;
-        
-        Ok(Ticker {
-            symbol: symbol.to_string(),
-            timestamp: Utc::now(),
-            last_price: Self::parse_decimal(data["lastPrice"].as_str().unwrap())?,
-            bid_price: Self::parse_decimal(data["bidPrice"].as_str().unwrap())?,
-            ask_price: Self::parse_decimal(data["askPrice"].as_str().unwrap())?,
-            volume_24h: Self::parse_decimal(data["volume"].as_str().unwrap())?,
-        })
-    }
-    
-    async fn get_orderbook(&self, symbol: &str, limit: u32) -> Result<OrderBook, ExchangeError> {
-        let params = vec![
-            ("symbol", symbol.to_string()),
-            ("limit", limit.to_string()),
-        ];
-        
-        let data = self.make_request("/api/v3/depth", Some(params)).await?;
-        
-        let parse_levels = |levels: &Value| -> Result<Vec<OrderBookLevel>, ExchangeError> {
-            levels.as_array()
-                .ok_or_else(|| ExchangeError::ApiError("Invalid orderbook data".to_string()))?
-                .iter()
-                .map(|level| {
-                    let price = Self::parse_decimal(level[0].as_str().unwrap())?;
-                    let quantity = Self::parse_decimal(level[1].as_str().unwrap())?;
-                    Ok(OrderBookLevel { price, quantity })
-                })
-                .collect()
-        };
-        
-        Ok(OrderBook {
-            symbol: symbol.to_string(),
-            timestamp: Utc::now(),
-            bids: parse_levels(&data["bids"])?,
-            asks: parse_levels(&data["asks"])?,
-        })
-    }
-    
-    async fn get_recent_trades(&self, symbol: &str, limit: u32) -> Result<Vec<ExchangeTrade>, ExchangeError> {
-        let params = vec![
-            ("symbol", symbol.to_string()),
-            ("limit", limit.to_string()),
-        ];
-        
-        let data = self.make_request("/api/v3/trades", Some(params)).await?;
-        
-        data.as_array()
-            .ok_or_else(|| ExchangeError::ApiError("Invalid trades data".to_string()))?
-            .iter()
-            .map(|trade| {
-                Ok(ExchangeTrade {
-                    symbol: symbol.to_string(),
-                    timestamp: Utc.timestamp_millis_opt(trade["time"].as_i64().unwrap()).unwrap(),
-                    price: Self::parse_decimal(trade["price"].as_str().unwrap())?,
-                    quantity: Self::parse_decimal(trade["qty"].as_str().unwrap())?,
-                    is_buyer_maker: trade["isBuyerMaker"].as_bool().unwrap(),
-                })
-            })
-            .collect()
-    }
-    
-    async fn get_klines(
-        &self,
-        symbol: &str,
-        interval: &str,
-        start_time: Option<DateTime<Utc>>,
-        end_time: Option<DateTime<Utc>>,
-        limit: Option<u32>,
-    ) -> Result<Vec<MarketDataPoint>, ExchangeError> {
-        let mut params = vec![
-            ("symbol", symbol.to_string()),
-            ("interval", interval.to_string()),
-        ];
-        
-        if let Some(start) = start_time {
-            params.push(("startTime", start.timestamp_millis().to_string()));
-        }
-        if let Some(end) = end_time {
-            params.push(("endTime", end.timestamp_millis().to_string()));
-        }
-        if let Some(limit) = limit {
-            params.push(("limit", limit.to_string()));
-        }
-        
-        let data = self.make_request("/api/v3/klines", Some(params)).await?;
-        
-        data.as_array()
-            .ok_or_else(|| ExchangeError::ApiError("Invalid kline data".to_string()))?
-            .iter()
-            .map(|kline| {
-                Ok(MarketDataPoint {
-                    timestamp: Utc.timestamp_millis_opt(kline[0].as_i64().unwrap()).unwrap(),
-                    symbol: symbol.to_string(),
-                    price: kline[4].as_str().unwrap().parse().unwrap(),
-                    volume: kline[5].as_str().unwrap().parse().unwrap(),
-                    high: kline[2].as_str().unwrap().parse().unwrap(),
-                    low: kline[3].as_str().unwrap().parse().unwrap(),
-                    open: kline[1].as_str().unwrap().parse().unwrap(),
-                    close: kline[4].as_str().unwrap().parse().unwrap(),
-                })
-            })
-            .collect()
-    }
-    
-    async fn subscribe_market_data(
+    /// Handle WebSocket connection with reconnection logic
+    async fn handle_websocket_connection(
         &self,
         symbols: &[String],
-        callback: Box<dyn Fn(MarketDataPoint) + Send + Sync>,
+        callback: Box<dyn Fn(TickData) + Send + Sync>,
     ) -> Result<(), ExchangeError> {
-        // 构建正确的 stream names
-        let stream_names: Vec<String> = symbols
-            .iter()
-            .map(|s| format!("{}@ticker", s.to_lowercase()))
-            .collect();
-
-        // 正确构建 WebSocket URL，避免重复的 'ws' 路径
-        let ws_url = if stream_names.len() == 1 {
-            // 单个交易对格式：wss://stream.binance.com:9443/ws/btcusdt@ticker
-            format!("wss://stream.binance.com:9443/ws/{}", stream_names[0])
-        } else {
-            // 多个交易对格式：wss://stream.binance.com:9443/stream?streams=btcusdt@ticker/ethusdt@ticker
-            format!("wss://stream.binance.com:9443/stream?streams={}", stream_names.join("/"))
-        };
-
-        info!("Connecting to Binance WebSocket: {}", ws_url);
-
-        // 建立 WebSocket 连接
-        let (ws_stream, _response) = connect_async(&ws_url)
-            .await
-            .map_err(|e| ExchangeError::NetworkError(format!("WebSocket connection failed: {}", e)))?;
-
-        info!("WebSocket connection established successfully");
-
-        let (mut write, mut read) = ws_stream.split();
-
-        // 对于多个交易对，发送订阅消息
-        if stream_names.len() > 1 {
-            let subscribe_msg = serde_json::json!({
-                "method": "SUBSCRIBE",
-                "params": stream_names,
-                "id": 1
-            });
-
-            write
-                .send(Message::Text(subscribe_msg.to_string()))
-                .await
-                .map_err(|e| ExchangeError::NetworkError(format!("Failed to send subscription: {}", e)))?;
-
-            info!("Subscription message sent: {}", subscribe_msg);
-        }
-
-        // 处理接收到的消息
-        while let Some(msg_result) = read.next().await {
-            match msg_result {
-                Ok(msg) => {
-                    match msg {
-                        Message::Text(text) => {
-                            info!("Received market data: {}", text);
-                            debug!("Received message: {}", text);
-                            
-                            if let Ok(data) = serde_json::from_str::<serde_json::Value>(&text) {
-                                // 处理市场数据
-                                let ticker_data = if let Some(stream_data) = data.get("data") {
-                                    stream_data // 多流格式
-                                } else {
-                                    &data // 单流格式
-                                };
-
-                                if let Some(market_data) = self.parse_ticker_message(ticker_data) {
-                                    info!("Successfully parsed market data for {}: price={}", 
-                                            market_data.symbol, market_data.price);
-                                    callback(market_data);
-                                }
-                            }
-                        }
-                        Message::Ping(data) => {
-                            write
-                                .send(Message::Pong(data))
-                                .await
-                                .map_err(|e| ExchangeError::NetworkError(format!("Failed to send pong: {}", e)))?;
-                        }
-                        Message::Close(frame) => {
-                            error!("WebSocket closed by server: {:?}", frame);
-                            return Err(ExchangeError::NetworkError("Connection closed by server".into()));
-                        }
-                        _ => {}
-                    }
+        let streams = build_binance_trade_streams(symbols)?;
+        info!("Connecting to Binance WebSocket with {} streams", streams.len());
+        
+        let mut reconnect_attempts = 0;
+        const MAX_RECONNECT_ATTEMPTS: u32 = 10;
+        
+        loop {
+            match self.connect_and_subscribe(&streams, &callback).await {
+                Ok(()) => {
+                    // Reset reconnect attempts on successful connection
+                    reconnect_attempts = 0;
+                    info!("WebSocket connection ended normally");
                 }
                 Err(e) => {
-                    error!("WebSocket error: {}", e);
-                    return Err(ExchangeError::NetworkError(e.to_string()));
+                    reconnect_attempts += 1;
+                    error!("WebSocket connection failed (attempt {}): {}", reconnect_attempts, e);
+                    
+                    if reconnect_attempts >= MAX_RECONNECT_ATTEMPTS {
+                        return Err(ExchangeError::NetworkError(
+                            format!("Max reconnection attempts ({}) exceeded", MAX_RECONNECT_ATTEMPTS)
+                        ));
+                    }
+                    
+                    warn!("Attempting to reconnect in {:?}...", RECONNECT_DELAY);
+                    sleep(RECONNECT_DELAY).await;
                 }
             }
         }
+    }
 
+    /// Connect to WebSocket and handle subscription
+    async fn connect_and_subscribe(
+        &self,
+        streams: &[String],
+        callback: &Box<dyn Fn(TickData) + Send + Sync>,
+    ) -> Result<(), ExchangeError> {
+        // Establish WebSocket connection
+        let (ws_stream, _) = connect_async(&self.ws_url).await
+            .map_err(|e| ExchangeError::WebSocketError(format!("Failed to connect: {}", e)))?;
+        
+        debug!("WebSocket connected to {}", self.ws_url);
+        
+        let (mut write, mut read) = ws_stream.split();
+        
+        // Send subscription message
+        let subscribe_msg = BinanceSubscribeMessage::new(streams.to_vec());
+        let subscribe_json = serde_json::to_string(&subscribe_msg)
+            .map_err(|e| ExchangeError::ParseError(format!("Failed to serialize subscription: {}", e)))?;
+        
+        write.send(Message::Text(subscribe_json)).await
+            .map_err(|e| ExchangeError::WebSocketError(format!("Failed to send subscription: {}", e)))?;
+        
+        info!("Subscription sent for {} streams", streams.len());
+        
+        // Message processing loop
+        while let Some(msg) = read.next().await {
+            match msg.map_err(|e| ExchangeError::WebSocketError(e.to_string()))? {
+                Message::Text(text) => {
+                    match self.parse_trade_message(&text) {
+                        Ok(tick_data) => {
+                            debug!("Received trade: symbol={}, price={}, quantity={}", 
+                                   tick_data.symbol, tick_data.price, tick_data.quantity);
+                            callback(tick_data);
+                        }
+                        Err(ExchangeError::ParseError(msg)) if msg.contains("Control message") => {
+                            // Ignore control messages (subscription confirmations, etc.)
+                            continue;
+                        }
+                        Err(e) => {
+                            warn!("Failed to parse trade message: {}. Raw message: {}", e, text);
+                            // Continue processing other messages instead of breaking
+                            continue;
+                        }
+                    }
+                }
+                Message::Ping(ping) => {
+                    debug!("Received ping, sending pong");
+                    write.send(Message::Pong(ping)).await
+                        .map_err(|e| ExchangeError::WebSocketError(format!("Failed to send pong: {}", e)))?;
+                }
+                Message::Pong(_) => {
+                    debug!("Received pong");
+                }
+                Message::Close(_) => {
+                    info!("WebSocket connection closed by server");
+                    break;
+                }
+                _ => {
+                    debug!("Received unexpected message type");
+                }
+            }
+        }
+        
         Ok(())
+    }
+
+    /// Fetch historical trades using REST API
+    async fn fetch_historical_trades_api(
+        &self,
+        params: &HistoricalTradeParams,
+    ) -> Result<Vec<TickData>, ExchangeError> {
+        let mut url = format!("{}/api/v3/aggTrades", self.api_url);
+        url.push_str(&format!("?symbol={}", params.symbol));
+        
+        if let Some(start_time) = params.start_time {
+            url.push_str(&format!("&startTime={}", start_time.timestamp_millis()));
+        }
+        
+        if let Some(end_time) = params.end_time {
+            url.push_str(&format!("&endTime={}", end_time.timestamp_millis()));
+        }
+        
+        if let Some(limit) = params.limit {
+            // Binance API has a maximum limit of 1000
+            let limit = limit.min(1000);
+            url.push_str(&format!("&limit={}", limit));
+        }
+        
+        debug!("Fetching historical trades from: {}", url);
+        
+        let response = self.client
+            .get(&url)
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await?;
+        
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(ExchangeError::ApiError(
+                format!("HTTP {}: {}", status, error_text)
+            ));
+        }
+        
+        let trades_json = response.text().await?;
+        let trades: Vec<serde_json::Value> = serde_json::from_str(&trades_json)?;
+        
+        let mut tick_data_vec = Vec::with_capacity(trades.len());
+        
+        for trade in trades {
+            // Parse aggregated trade data from Binance API
+            let trade_msg = BinanceTradeMessage {
+                symbol: params.symbol.clone(),
+                trade_id: trade["a"].as_u64().unwrap_or(0), // Aggregate trade ID
+                price: trade["p"].as_str().unwrap_or("0").to_string(),
+                quantity: trade["q"].as_str().unwrap_or("0").to_string(),
+                trade_time: trade["T"].as_u64().unwrap_or(0),
+                is_buyer_maker: trade["m"].as_bool().unwrap_or(false),
+            };
+            
+            match convert_binance_to_tick_data(trade_msg) {
+                Ok(tick_data) => tick_data_vec.push(tick_data),
+                Err(e) => warn!("Failed to convert historical trade: {}", e),
+            }
+        }
+        
+        info!("Successfully fetched {} historical trades for {}", tick_data_vec.len(), params.symbol);
+        Ok(tick_data_vec)
+    }
+}
+
+#[async_trait]
+impl Exchange for BinanceExchange {
+    async fn subscribe_trades(
+        &self,
+        symbols: &[String],
+        callback: Box<dyn Fn(TickData) + Send + Sync>,
+    ) -> Result<(), ExchangeError> {
+        if symbols.is_empty() {
+            return Err(ExchangeError::InvalidSymbol("No symbols provided".to_string()));
+        }
+        
+        info!("Starting Binance trade subscription for symbols: {:?}", symbols);
+        
+        // This will run indefinitely with reconnection logic
+        self.handle_websocket_connection(symbols, callback).await
+    }
+
+    async fn get_historical_trades(
+        &self,
+        params: HistoricalTradeParams,
+    ) -> Result<Vec<TickData>, ExchangeError> {
+        if params.symbol.is_empty() {
+            return Err(ExchangeError::InvalidSymbol("Symbol cannot be empty".to_string()));
+        }
+        
+        info!("Fetching historical trades for symbol: {}", params.symbol);
+        
+        self.fetch_historical_trades_api(&params).await
+    }
+}
+
+impl Default for BinanceExchange {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::types::TradeSide;
+    use chrono::Utc;
+    use rust_decimal::Decimal;
+    use std::str::FromStr;
+
+    #[test]
+    fn test_parse_trade_message() {
+        let exchange = BinanceExchange::new();
+        
+        // Test combined stream message format
+        let stream_msg = r#"{
+            "stream": "btcusdt@trade",
+            "data": {
+                "e": "trade",
+                "E": 1672515782136,
+                "s": "BTCUSDT",
+                "t": 12345,
+                "p": "50000.00",
+                "q": "0.001",
+                "b": 88,
+                "a": 50,
+                "T": 1672515782136,
+                "m": false,
+                "M": true
+            }
+        }"#;
+        
+        let tick_data = exchange.parse_trade_message(stream_msg).unwrap();
+        
+        assert_eq!(tick_data.symbol, "BTCUSDT");
+        assert_eq!(tick_data.price, Decimal::from_str("50000.00").unwrap());
+        assert_eq!(tick_data.quantity, Decimal::from_str("0.001").unwrap());
+        assert_eq!(tick_data.side, TradeSide::Buy); // is_buyer_maker = false -> Buy
+        assert_eq!(tick_data.trade_id, "12345");
+        assert!(!tick_data.is_buyer_maker);
+    }
+
+    #[test]
+    fn test_parse_direct_trade_message() {
+        let exchange = BinanceExchange::new();
+        
+        // Test direct trade message format
+        let trade_msg = r#"{
+            "e": "trade",
+            "E": 1672515782136,
+            "s": "ETHUSDT",
+            "t": 67890,
+            "p": "3000.50",
+            "q": "0.1",
+            "b": 88,
+            "a": 50,
+            "T": 1672515782136,
+            "m": true,
+            "M": true
+        }"#;
+        
+        let tick_data = exchange.parse_trade_message(trade_msg).unwrap();
+        
+        assert_eq!(tick_data.symbol, "ETHUSDT");
+        assert_eq!(tick_data.price, Decimal::from_str("3000.50").unwrap());
+        assert_eq!(tick_data.side, TradeSide::Sell); // is_buyer_maker = true -> Sell
+        assert!(tick_data.is_buyer_maker);
+    }
+
+    #[test]
+    fn test_parse_subscription_confirmation() {
+        let exchange = BinanceExchange::new();
+        
+        let confirmation_msg = r#"{
+            "result": null,
+            "id": 1
+        }"#;
+        
+        let result = exchange.parse_trade_message(confirmation_msg);
+        assert!(result.is_err());
+        
+        // Should be a parse error indicating it's a control message
+        if let Err(ExchangeError::ParseError(msg)) = result {
+            assert!(msg.contains("Control message"));
+        } else {
+            panic!("Expected ParseError with control message indication");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_historical_trade_params() {
+        let params = HistoricalTradeParams::new("BTCUSDT".to_string())
+            .with_limit(100)
+            .with_time_range(
+                Utc::now() - chrono::Duration::hours(1),
+                Utc::now()
+            );
+        
+        assert_eq!(params.symbol, "BTCUSDT");
+        assert_eq!(params.limit, Some(100));
+        assert!(params.start_time.is_some());
+        assert!(params.end_time.is_some());
     }
 }

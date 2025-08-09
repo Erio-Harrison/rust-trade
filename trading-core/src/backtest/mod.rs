@@ -1,16 +1,8 @@
-// trading-core/src/backtest/mod.rs
-
-pub mod sma;
-pub mod types;
 pub mod engine;
+pub mod portfolio;
 pub mod metrics;
+pub mod strategy;
 
-use std::collections::HashMap;
-pub use types::*;
-
-use crate::data::types::MarketDataPoint;
-pub trait Strategy: Send {
-    fn on_data(&mut self, data: &MarketDataPoint, portfolio: &Portfolio) -> Vec<Order>;
-    fn get_parameters(&self) -> &HashMap<String, String>;
-    fn get_type(&self) -> StrategyType;
-}
+pub use engine::{BacktestEngine, BacktestResult, BacktestConfig};
+pub use portfolio::{Portfolio, Position, Trade};
+pub use strategy::{Strategy, Signal, create_strategy, list_strategies, StrategyInfo};
