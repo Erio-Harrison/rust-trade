@@ -19,7 +19,6 @@ pub struct Settings {
 impl Settings {
     pub fn new() -> Result<Self, ConfigError> {
         let run_mode = std::env::var("RUN_MODE").unwrap_or_else(|_| "development".into());
-        let config_path = format!("../config/{}", run_mode);
         
         let mut builder = Config::builder()
             .add_source(File::with_name(&format!("../config/{}", run_mode)).required(true));
