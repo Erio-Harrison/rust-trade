@@ -56,7 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let collector = Arc::new(MarketDataCollector::new(
                 Box::new(exchange),
                 MarketDataManager::new(database.pool.clone()),
-                vec!["BTCUSDT".to_string()],
+                settings.symbols.clone(),
             ));
 
             let collector_clone = collector.clone();
