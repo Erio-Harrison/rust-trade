@@ -1,7 +1,10 @@
+# The port used when the machine is used as a server
+port = 8080
+
+# BTC trading pairs
+symbols = ["BTCUSDT", "ETHUSDT"]
+
 [database]
 max_connections = 5
 min_connections = 1
 max_lifetime = 1800
-
-[api]
-port = 8080
