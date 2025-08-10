@@ -1,354 +1,555 @@
+// src/app/backtest/page.tsx
 'use client';
 
-import {invoke} from '@tauri-apps/api/core';
-import { getVersion } from '@tauri-apps/api/app';
 import { useEffect, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-
-interface TauriContext {
-  invoke: unknown;
-  [key: string]: unknown;
-}
-
-declare global {
-  interface Window {
-    __TAURI__: TauriContext | undefined;
-  }
-}
-
-interface BacktestConfig {
-  start_time: string;
-  end_time: string;
-  initial_capital: string;
-  symbol: string;
-  commission_rate: string;
-}
-
-interface BacktestRequest {
-  strategy_type: string;
-  config: BacktestConfig;
-  parameters: Record<string, string>;
-}
+import { Loader2, Database, TrendingUp, AlertCircle, CheckCircle } from 'lucide-react';
+import { 
+  DataInfoResponse, 
+  StrategyInfo, 
+  BacktestRequest, 
+  BacktestResponse,
+  HistoricalDataRequest 
+} from '@/types/backtest';
 
 interface BacktestParams {
-  strategy_type: string;
+  strategy_id: string;
   symbol: string;
-  days: number;
-  initialCapital: string;
-  commissionRate: string;
-  shortPeriod: number;
-  longPeriod: number;
+  data_count: number;
+  initial_capital: string;
+  commission_rate: string;
+  short_period: string;
+  long_period: string;
+  [key: string]: string | number;
 }
 
-interface TradeResponse {
-  timestamp: string;
-  side: 'Buy' | 'Sell';
-  symbol: string;
-  quantity: string;
-  price: string;
-  commission: string;
-}
+export default function BacktestPage() {
+  // State for data info
+  const [dataInfo, setDataInfo] = useState<DataInfoResponse | null>(null);
+  const [strategies, setStrategies] = useState<StrategyInfo[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-interface EquityPoint {
-  timestamp: string;
-  value: string;
-}
+  // State for backtest configuration
+  const [params, setParams] = useState<BacktestParams>({
+    strategy_id: '',
+    symbol: '',
+    data_count: 10000,
+    initial_capital: '10000',
+    commission_rate: '0.001',
+    short_period: '5',
+    long_period: '20',
+  });
 
-interface BacktestResponse {
-  equity_curve: EquityPoint[];
-  losing_trades: number;
-  max_drawdown: string;
-  total_return: string;
-  total_trades: number;
-  trades: TradeResponse[];
-  winning_trades: number;
-}
+  // State for validation and execution
+  const [configValid, setConfigValid] = useState<boolean | null>(null);
+  const [isRunning, setIsRunning] = useState(false);
+  const [result, setResult] = useState<BacktestResponse | null>(null);
 
-  // Formatting functions
-  const formatPercentage = (value: string) => {
-    const num = parseFloat(value);
+  // Initialize data on component mount
+  useEffect(() => {
+    initializeData();
+  }, []);
+
+  // Validate configuration when params change
+  useEffect(() => {
+    if (params.symbol && params.data_count > 0) {
+      validateConfiguration();
+    }
+  }, [params.symbol, params.data_count]);
+
+  const initializeData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      // Load data info and strategies in parallel
+      const [dataInfoResult, strategiesResult] = await Promise.all([
+        invoke<DataInfoResponse>('get_data_info'),
+        invoke<StrategyInfo[]>('get_available_strategies')
+      ]);
+
+      setDataInfo(dataInfoResult);
+      setStrategies(strategiesResult);
+
+      // Set default values
+      if (strategiesResult.length > 0) {
+        setParams(prev => ({ ...prev, strategy_id: strategiesResult[0].id }));
+      }
+      if (dataInfoResult.symbol_info.length > 0) {
+        setParams(prev => ({ ...prev, symbol: dataInfoResult.symbol_info[0].symbol }));
+      }
+
+    } catch (err) {
+      console.error('Failed to initialize data:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load data');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const validateConfiguration = async () => {
+    try {
+      const isValid = await invoke<boolean>('validate_backtest_config', {
+        symbol: params.symbol,
+        dataCount: params.data_count
+      });
+      setConfigValid(isValid);
+    } catch (err) {
+      console.error('Validation failed:', err);
+      setConfigValid(false);
+    }
+  };
+
+  const runBacktest = async () => {
+    if (!configValid) {
+      setError('Configuration is not valid');
+      return;
+    }
+
+    try {
+      setIsRunning(true);
+      setError(null);
+      setResult(null);
+
+      const request: BacktestRequest = {
+        strategy_id: params.strategy_id,
+        symbol: params.symbol,
+        data_count: params.data_count,
+        initial_capital: params.initial_capital,
+        commission_rate: params.commission_rate,
+        strategy_params: {
+          short_period: params.short_period,
+          long_period: params.long_period,
+        }
+      };
+
+      console.log('Running backtest with request:', request);
+      const response = await invoke<BacktestResponse>('run_backtest', { request });
+      console.log('Backtest completed:', response);
+      setResult(response);
+
+    } catch (err) {
+      console.error('Backtest failed:', err);
+      setError(err instanceof Error ? err.message : 'Backtest failed');
+    } finally {
+      setIsRunning(false);
+    }
+  };
+
+  const formatPercentage = (value: string | number) => {
+    const num = typeof value === 'string' ? parseFloat(value) : value;
     return num.toFixed(2);
   };
 
   const formatPrice = (value: string) => {
-    const num = parseFloat(value);
-    return num.toFixed(2);
+    return parseFloat(value).toFixed(2);
   };
 
   const formatQuantity = (value: string) => {
-    const num = parseFloat(value);
-    return num.toFixed(8); // 8 decimal places for crypto
+    return parseFloat(value).toFixed(8);
   };
 
-  const formatCommission = (value: string) => {
-    const num = parseFloat(value);
-    return num.toFixed(4); // 4 decimal places for commission
-  };
-
-  export default function Backtest() {
-    const [params, setParams] = useState<BacktestParams>({
-      strategy_type: 'SMACross',
-      symbol: 'BTCUSDT',
-      days: 30,
-      initialCapital: '10000',
-      commissionRate: '0.001',
-      shortPeriod: 5,
-      longPeriod: 20,
-    });
-    const [result, setResult] = useState<BacktestResponse | null>(null);
-    const [isLoading, setIsLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-  
-    // 2. 使用 useEffect 检查 Tauri 环境
-    useEffect(() => {
-      async function checkTauriEnvironment() {
-        try {
-          // 尝试获取 Tauri 版本，如果成功说明在 Tauri 环境中
-          const version = await getVersion();
-          console.log('Tauri version:', version);
-        } catch (e) {
-          console.error('Not in Tauri environment:', e);
-          setError('Not running in Tauri environment');
-        }
-      }
-  
-      checkTauriEnvironment();
-    }, []);
-  
-    const runBacktest = async () => {
-      setIsLoading(true);
-      setError(null);
-  
-      try {
-        const endDate = new Date();
-        const startDate = new Date();
-        startDate.setDate(startDate.getDate() - params.days);
-  
-        const request = {
-          strategy_type: params.strategy_type,
-          config: {
-            start_time: startDate.toISOString(),
-            end_time: endDate.toISOString(),   
-            symbol: params.symbol,
-            initial_capital: params.initialCapital,
-            commission_rate: params.commissionRate,
-          },
-          parameters: {
-            short_period: params.shortPeriod.toString(),
-            long_period: params.longPeriod.toString(),
-            position_size_percent: '10',
-          },
-        };
-  
-        console.log('Sending request to backend:', request);
-        const response = await invoke<BacktestResponse>('run_backtest', { request });
-        console.log('Raw backtest response:', response);
-        setResult(response);
-      } catch (err) {
-        console.error('Backtest error:', err);
-        const errorMessage = err instanceof Error ? 
-          err.message : 'Failed to run backtest';
-        setError(errorMessage);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-  
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <Loader2 className="w-8 h-8 animate-spin" />
+        <span className="ml-2">Loading trading data...</span>
+      </div>
+    );
+  }
 
   return (
-    <div className="p-6">
-      <h1 className="text-2xl font-bold mb-6">Backtest Strategy</h1>
+    <div className="p-6 space-y-6">
+      <h1 className="text-3xl font-bold">Strategy Backtesting</h1>
 
-      {/* Parameters Form */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-6">
-        <h2 className="text-xl font-semibold mb-4">Parameters</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          <div>
-            <label className="block text-sm font-medium mb-1">Strategy Type</label>
-            <input
-              type="text"
-              value={params.strategy_type}
-              onChange={(e) => setParams({ ...params, strategy_type: e.target.value })}
-              className="w-full p-2 border rounded"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Symbol</label>
-            <input
-              type="text"
-              value={params.symbol}
-              onChange={(e) => setParams({ ...params, symbol: e.target.value })}
-              className="w-full p-2 border rounded"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Days</label>
-            <input
-              type="number"
-              value={params.days}
-              onChange={(e) => setParams({ ...params, days: parseInt(e.target.value) })}
-              className="w-full p-2 border rounded"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Initial Capital</label>
-            <input
-              type="text"
-              value={params.initialCapital}
-              onChange={(e) => setParams({ ...params, initialCapital: e.target.value })}
-              className="w-full p-2 border rounded"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Commission Rate</label>
-            <input
-              type="text"
-              value={params.commissionRate}
-              onChange={(e) => setParams({ ...params, commissionRate: e.target.value })}
-              className="w-full p-2 border rounded"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Short Period</label>
-            <input
-              type="number"
-              value={params.shortPeriod}
-              onChange={(e) => setParams({ ...params, shortPeriod: parseInt(e.target.value) })}
-              className="w-full p-2 border rounded"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Long Period</label>
-            <input
-              type="number"
-              value={params.longPeriod}
-              onChange={(e) => setParams({ ...params, longPeriod: parseInt(e.target.value) })}
-              className="w-full p-2 border rounded"
-            />
-          </div>
-        </div>
-        <button
-          onClick={runBacktest}
-          disabled={isLoading}
-          className="mt-4 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:bg-gray-400"
-        >
-          {isLoading ? 'Running...' : 'Run Backtest'}
-        </button>
-      </div>
-
-      {error && (
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-6">
-          {error}
-        </div>
-      )}
-
-      {/* Results Summary */}
-      {result && (
-        <div className="space-y-6">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-            <h2 className="text-xl font-semibold mb-4">Backtest Results</h2>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+      {/* Data Information Section */}
+      {dataInfo && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Database className="w-5 h-5" />
+              Database Information
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
               <div>
-                <p className="text-sm text-gray-500">Total Return</p>
-                <p className="text-xl font-bold">{formatPercentage(result.total_return)}%</p>
+                <p className="text-sm text-gray-500">Total Records</p>
+                <p className="text-2xl font-bold">{dataInfo.total_records.toLocaleString()}</p>
               </div>
               <div>
-                <p className="text-sm text-gray-500">Total Trades</p>
-                <p className="text-xl font-bold">{result.total_trades}</p>
+                <p className="text-sm text-gray-500">Available Symbols</p>
+                <p className="text-2xl font-bold">{dataInfo.symbols_count}</p>
               </div>
               <div>
-                <p className="text-sm text-gray-500">Winning Trades</p>
-                <p className="text-xl font-bold">{result.winning_trades}</p>
+                <p className="text-sm text-gray-500">Earliest Data</p>
+                <p className="text-sm font-medium">
+                  {dataInfo.earliest_time ? new Date(dataInfo.earliest_time).toLocaleDateString() : 'N/A'}
+                </p>
               </div>
               <div>
-                <p className="text-sm text-gray-500">Losing Trades</p>
-                <p className="text-xl font-bold">{result.losing_trades}</p>
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Max Drawdown</p>
-                <p className="text-xl font-bold">{formatPercentage(result.max_drawdown)}%</p>
+                <p className="text-sm text-gray-500">Latest Data</p>
+                <p className="text-sm font-medium">
+                  {dataInfo.latest_time ? new Date(dataInfo.latest_time).toLocaleDateString() : 'N/A'}
+                </p>
               </div>
             </div>
+            
+            <div className="mt-4">
+              <p className="text-sm font-medium mb-2">Top Symbols by Records:</p>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                {dataInfo.symbol_info.slice(0, 6).map((symbol) => (
+                  <div key={symbol.symbol} className="text-xs bg-gray-100 dark:bg-gray-800 p-2 rounded">
+                    <span className="font-medium">{symbol.symbol}</span>
+                    <span className="text-gray-500 ml-2">({symbol.records_count.toLocaleString()} records)</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Configuration Section */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <TrendingUp className="w-5 h-5" />
+            Backtest Configuration
+            {configValid !== null && (
+              configValid ? (
+                <CheckCircle className="w-5 h-5 text-green-500" />
+              ) : (
+                <AlertCircle className="w-5 h-5 text-red-500" />
+              )
+            )}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {/* Strategy Selection */}
+            <div>
+              <label className="block text-sm font-medium mb-1">Strategy</label>
+              <select
+                value={params.strategy_id}
+                onChange={(e) => setParams({ ...params, strategy_id: e.target.value })}
+                className="w-full p-2 border rounded dark:bg-gray-800 dark:border-gray-600"
+              >
+                <option value="">Select Strategy</option>
+                {strategies.map((strategy) => (
+                  <option key={strategy.id} value={strategy.id}>
+                    {strategy.name}
+                  </option>
+                ))}
+              </select>
+              {params.strategy_id && (
+                <p className="text-xs text-gray-500 mt-1">
+                  {strategies.find(s => s.id === params.strategy_id)?.description}
+                </p>
+              )}
+            </div>
+
+            {/* Symbol Selection */}
+            <div>
+              <label className="block text-sm font-medium mb-1">Symbol</label>
+              <select
+                value={params.symbol}
+                onChange={(e) => setParams({ ...params, symbol: e.target.value })}
+                className="w-full p-2 border rounded dark:bg-gray-800 dark:border-gray-600"
+              >
+                <option value="">Select Symbol</option>
+                {dataInfo?.symbol_info.map((symbol) => (
+                  <option key={symbol.symbol} value={symbol.symbol}>
+                    {symbol.symbol} ({symbol.records_count.toLocaleString()} records)
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Data Count */}
+            <div>
+              <label className="block text-sm font-medium mb-1">Data Points</label>
+              <input
+                type="number"
+                value={params.data_count}
+                onChange={(e) => setParams({ ...params, data_count: parseInt(e.target.value) || 0 })}
+                className="w-full p-2 border rounded dark:bg-gray-800 dark:border-gray-600"
+                min="100"
+                max="100000"
+              />
+              {params.symbol && dataInfo && (
+                <p className="text-xs text-gray-500 mt-1">
+                  Max available: {dataInfo.symbol_info.find(s => s.symbol === params.symbol)?.records_count.toLocaleString() || 0}
+                </p>
+              )}
+            </div>
+
+            {/* Initial Capital */}
+            <div>
+              <label className="block text-sm font-medium mb-1">Initial Capital ($)</label>
+              <input
+                type="text"
+                value={params.initial_capital}
+                onChange={(e) => setParams({ ...params, initial_capital: e.target.value })}
+                className="w-full p-2 border rounded dark:bg-gray-800 dark:border-gray-600"
+                placeholder="10000"
+              />
+            </div>
+
+            {/* Commission Rate */}
+            <div>
+              <label className="block text-sm font-medium mb-1">Commission Rate (%)</label>
+              <input
+                type="text"
+                value={(parseFloat(params.commission_rate) * 100).toString()}
+                onChange={(e) => {
+                  const percent = parseFloat(e.target.value) || 0;
+                  setParams({ ...params, commission_rate: (percent / 100).toString() });
+                }}
+                className="w-full p-2 border rounded dark:bg-gray-800 dark:border-gray-600"
+                placeholder="0.1"
+              />
+            </div>
+
+            {/* Strategy Parameters */}
+            {params.strategy_id === 'sma' && (
+              <>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Short Period</label>
+                  <input
+                    type="number"
+                    value={params.short_period}
+                    onChange={(e) => setParams({ ...params, short_period: e.target.value })}
+                    className="w-full p-2 border rounded dark:bg-gray-800 dark:border-gray-600"
+                    min="1"
+                    max="100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Long Period</label>
+                  <input
+                    type="number"
+                    value={params.long_period}
+                    onChange={(e) => setParams({ ...params, long_period: e.target.value })}
+                    className="w-full p-2 border rounded dark:bg-gray-800 dark:border-gray-600"
+                    min="1"
+                    max="200"
+                  />
+                </div>
+              </>
+            )}
           </div>
+
+          {/* Validation Status */}
+          {configValid !== null && (
+            <div className={`mt-4 p-3 rounded ${configValid ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'}`}>
+              {configValid ? (
+                <p className="flex items-center gap-2">
+                  <CheckCircle className="w-4 h-4" />
+                  Configuration is valid and ready for backtesting
+                </p>
+              ) : (
+                <p className="flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4" />
+                  Insufficient data for the selected configuration
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Run Button */}
+          <button
+            onClick={runBacktest}
+            disabled={!configValid || isRunning || !params.strategy_id || !params.symbol}
+            className={`mt-4 px-6 py-2 rounded font-medium ${
+              configValid && !isRunning && params.strategy_id && params.symbol
+                ? 'bg-blue-500 hover:bg-blue-600 text-white'
+                : 'bg-gray-400 text-gray-600 cursor-not-allowed'
+            }`}
+          >
+            {isRunning ? (
+              <span className="flex items-center gap-2">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Running Backtest...
+              </span>
+            ) : (
+              'Run Backtest'
+            )}
+          </button>
+        </CardContent>
+      </Card>
+
+      {/* Error Display */}
+      {error && (
+        <Card className="border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-900/20">
+          <CardContent className="pt-6">
+            <div className="flex items-center gap-2 text-red-800 dark:text-red-200">
+              <AlertCircle className="w-5 h-5" />
+              <span className="font-medium">Error:</span>
+              <span>{error}</span>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Results Section */}
+      {result && (
+        <div className="space-y-6">
+          {/* Summary Metrics */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Backtest Results - {result.strategy_name}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+                <div>
+                  <p className="text-sm text-gray-500">Total Return</p>
+                  <p className={`text-xl font-bold ${parseFloat(result.return_percentage) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                    {formatPercentage(result.return_percentage)}%
+                  </p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-500">Final Value</p>
+                  <p className="text-xl font-bold">${formatPrice(result.final_value)}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-500">Total P&L</p>
+                  <p className={`text-xl font-bold ${parseFloat(result.total_pnl) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                    ${formatPrice(result.total_pnl)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-500">Sharpe Ratio</p>
+                  <p className="text-xl font-bold">{formatPercentage(result.sharpe_ratio)}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-500">Max Drawdown</p>
+                  <p className="text-xl font-bold text-red-500">{formatPercentage(result.max_drawdown)}%</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-500">Win Rate</p>
+                  <p className="text-xl font-bold">{formatPercentage(result.win_rate)}%</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-500">Total Trades</p>
+                  <p className="text-xl font-bold">{result.total_trades}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-500">Winning Trades</p>
+                  <p className="text-xl font-bold text-green-500">{result.winning_trades}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-500">Losing Trades</p>
+                  <p className="text-xl font-bold text-red-500">{result.losing_trades}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-500">Profit Factor</p>
+                  <p className="text-xl font-bold">{formatPercentage(result.profit_factor)}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
           {/* Equity Curve */}
           {result.equity_curve && result.equity_curve.length > 0 && (
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-              <h2 className="text-xl font-semibold mb-4">Equity Curve</h2>
-              <div className="h-96">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart
-                    data={result.equity_curve.map((point) => ({
-                      timestamp: new Date(point.timestamp).getTime(),
-                      value: parseFloat(point.value),
-                    }))}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis
-                      dataKey="timestamp"
-                      type="number"
-                      domain={['auto', 'auto']}
-                      tickFormatter={(timestamp) => new Date(timestamp).toLocaleDateString()}
-                      scale="time"
-                    />
-                    <YAxis
-                      domain={['auto', 'auto']}
-                      tickFormatter={(value) => `$${value.toFixed(2)}`}
-                    />
-                    <Tooltip
-                      labelFormatter={(timestamp) => new Date(timestamp).toLocaleString()}
-                      formatter={(value: number) => [`$${value.toFixed(2)}`, 'Portfolio Value']}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="value"
-                      stroke="#2563eb"
-                      dot={false}
-                      isAnimationActive={false}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
+            <Card>
+              <CardHeader>
+                <CardTitle>Portfolio Equity Curve</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="h-96">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart
+                      data={result.equity_curve.map((value, index) => ({
+                        index,
+                        value: parseFloat(value),
+                      }))}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis 
+                        dataKey="index"
+                        tickFormatter={(value) => `${value}`}
+                      />
+                      <YAxis
+                        domain={['auto', 'auto']}
+                        tickFormatter={(value) => `$${value.toFixed(0)}`}
+                      />
+                      <Tooltip
+                        formatter={(value: number) => [`$${value.toFixed(2)}`, 'Portfolio Value']}
+                        labelFormatter={(index) => `Trade #${index}`}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="value"
+                        stroke="#2563eb"
+                        dot={false}
+                        strokeWidth={2}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </CardContent>
+            </Card>
           )}
 
           {/* Trade History */}
           {result.trades && result.trades.length > 0 && (
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-              <h2 className="text-xl font-semibold mb-4">Trade History</h2>
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="text-left border-b">
-                      <th className="pb-2">Time</th>
-                      <th className="pb-2">Side</th>
-                      <th className="pb-2">Symbol</th>
-                      <th className="pb-2">Quantity</th>
-                      <th className="pb-2">Price</th>
-                      <th className="pb-2">Commission</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {result.trades.map((trade, index) => (
-                      <tr key={index} className="border-b">
-                        <td className="py-2">{new Date(trade.timestamp).toLocaleString()}</td>
-                        <td className={`py-2 ${trade.side === 'Buy' ? 'text-green-500' : 'text-red-500'}`}>
-                          {trade.side}
-                        </td>
-                        <td className="py-2">{trade.symbol}</td>
-                        <td className="py-2">{formatQuantity(trade.quantity)}</td>
-                        <td className="py-2">${formatPrice(trade.price)}</td>
-                        <td className="py-2">${formatCommission(trade.commission)}</td>
+            <Card>
+              <CardHeader>
+                <CardTitle>Trade History ({result.trades.length} trades)</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="text-left border-b">
+                        <th className="pb-2">#</th>
+                        <th className="pb-2">Time</th>
+                        <th className="pb-2">Side</th>
+                        <th className="pb-2">Symbol</th>
+                        <th className="pb-2">Quantity</th>
+                        <th className="pb-2">Price</th>
+                        <th className="pb-2">P&L</th>
+                        <th className="pb-2">Commission</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+                    </thead>
+                    <tbody>
+                      {result.trades.slice(0, 50).map((trade, index) => (
+                        <tr key={index} className="border-b">
+                          <td className="py-2">{index + 1}</td>
+                          <td className="py-2">{new Date(trade.timestamp).toLocaleString()}</td>
+                          <td className={`py-2 font-medium ${trade.side === 'Buy' ? 'text-green-500' : 'text-red-500'}`}>
+                            {trade.side}
+                          </td>
+                          <td className="py-2">{trade.symbol}</td>
+                          <td className="py-2">{formatQuantity(trade.quantity)}</td>
+                          <td className="py-2">${formatPrice(trade.price)}</td>
+                          <td className={`py-2 font-medium ${
+                            trade.realized_pnl 
+                              ? parseFloat(trade.realized_pnl) >= 0 ? 'text-green-500' : 'text-red-500'
+                              : ''
+                          }`}>
+                            {trade.realized_pnl ? `$${formatPrice(trade.realized_pnl)}` : '-'}
+                          </td>
+                          <td className="py-2">${formatPrice(trade.commission)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {result.trades.length > 50 && (
+                    <p className="text-sm text-gray-500 mt-2">
+                      Showing first 50 trades of {result.trades.length} total trades
+                    </p>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
           )}
         </div>
       )}
     </div>
   );
 }
-
