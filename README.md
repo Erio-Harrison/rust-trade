@@ -217,19 +217,30 @@ npm start
 
 ### Trading Symbols
 
-Edit `trading-core/config/development.toml`:
+Edit `config/development.toml`:
 
 ```toml
+# Trading pairs to monitor
 symbols = ["BTCUSDT", "ETHUSDT", "ADAUSDT"]
+
+[server]
+host = "0.0.0.0"
+port = 8080
 
 [database]
 max_connections = 5
 min_connections = 1
+max_lifetime = 1800
 
 [cache]
 [cache.memory]
 max_ticks_per_symbol = 1000
 ttl_seconds = 300
+
+[cache.redis]
+pool_size = 10
+ttl_seconds = 3600
+max_ticks_per_symbol = 10000
 ```
 
 ### Logging
