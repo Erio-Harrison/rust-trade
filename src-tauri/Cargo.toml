@@ -2,7 +2,7 @@
 name = "trading-desktop"
 version = "0.1.0"
 edition = "2021"
-license = "GPL-3.0-or-later"
+license = "MIT"
 
 [build-dependencies]
 tauri-build = { version = "2.0.0-beta.9", features = [] }
