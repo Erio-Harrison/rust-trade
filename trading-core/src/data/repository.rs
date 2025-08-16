@@ -4,6 +4,8 @@ use rust_decimal::Decimal;
 use sqlx::{PgPool, Row, QueryBuilder, Postgres};
 use tracing::{debug, error, info, warn};
 
+use crate::data::types::LiveStrategyLog;
+
 use super::types::{TickData, TradeSide, TickQuery, DataResult, DataError, BacktestDataInfo, DbStats, SymbolDataInfo };
 use super::cache::{TieredCache, TickDataCache};
 
@@ -582,6 +584,30 @@ impl TickDataRepository {
             // If no start time specified, assume it's a recent query
             true
         }
+    }
+
+    pub async fn insert_live_strategy_log(&self, log: &LiveStrategyLog) -> DataResult<()> {
+        sqlx::query!(
+            r#"
+            INSERT INTO live_strategy_log 
+            (timestamp, strategy_id, symbol, current_price, signal_type, 
+             portfolio_value, total_pnl, cache_hit, processing_time_us)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            "#,
+            log.timestamp,
+            log.strategy_id,
+            log.symbol,
+            log.current_price,
+            log.signal_type,
+            log.portfolio_value,
+            log.total_pnl,
+            log.cache_hit,
+            log.processing_time_us as i32
+        )
+        .execute(&self.pool)
+        .await?;
+        
+        Ok(())
     }
 }
 

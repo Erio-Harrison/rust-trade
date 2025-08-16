@@ -1,6 +1,8 @@
-use std::sync::Arc;
+use std::sync::{Arc};
 use std::time::Duration;
+use rust_decimal::Decimal;
 use sqlx::PgPool;
+use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -9,11 +11,13 @@ mod data;
 mod exchange;
 mod service;
 mod backtest;
+mod live_trading; 
 
 use config::Settings;
 use data::{repository::TickDataRepository, cache::TieredCache};
 use exchange::BinanceExchange;
 use service::MarketDataService;
+use live_trading::PaperTradingProcessor;
 
 use crate::data::cache::TickDataCache;
 
@@ -23,7 +27,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     match args.get(1).map(|s| s.as_str()) {
         Some("backtest") => run_backtest_mode().await,
-        Some("live") | None => run_live_mode().await,
+        Some("live") => {
+            // Check if paper trading is enabled
+            if args.contains(&"--paper-trading".to_string()) {
+                run_live_with_paper_trading().await
+            } else {
+                run_live_mode().await
+            }
+        }
+        None => run_live_mode().await,
         Some("--help") | Some("-h") => {
             print_usage();
             Ok(())
@@ -45,6 +57,117 @@ fn print_usage() {
     println!("  cargo run backtest       # Run backtesting mode");
     println!("  cargo run --help         # Show this help message");
     println!();
+}
+
+
+async fn run_live_with_paper_trading() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize application environment
+    init_application().await?;
+
+    info!("🎯 Starting Trading Core Application (Live Mode + Paper Trading)");
+
+    // Load configuration
+    let settings = Settings::new()?;
+    
+    // Check if paper trading is enabled
+    if !settings.paper_trading.enabled {
+        warn!("⚠️ Paper trading is disabled in config. Set paper_trading.enabled = true");
+        warn!("⚠️ Falling back to live data collection only...");
+        return run_live_mode().await;
+    }
+    
+    info!("📋 Configuration loaded successfully");
+    info!("📊 Monitoring symbols: {:?}", settings.symbols);
+    info!("🎯 Paper Trading Strategy: {}", settings.paper_trading.strategy);
+    info!("💰 Initial Capital: ${}", settings.paper_trading.initial_capital);
+    info!("🗄️  Database: {} connections", settings.database.max_connections);
+    info!("💾 Cache: Memory({} ticks/{}s) + Redis({} ticks/{}s)", 
+          settings.cache.memory.max_ticks_per_symbol,
+          settings.cache.memory.ttl_seconds,
+          settings.cache.redis.max_ticks_per_symbol,
+          settings.cache.redis.ttl_seconds);
+
+    // Verify strategy exists
+    if crate::backtest::strategy::get_strategy_info(&settings.paper_trading.strategy).is_none() {
+        error!("❌ Unknown strategy: {}", settings.paper_trading.strategy);
+        error!("💡 Available strategies: rsi, sma");
+        std::process::exit(1);
+    }
+
+    // Create database connection pool
+    info!("🔌 Connecting to database...");
+    let pool = create_database_pool(&settings).await?;
+    test_database_connection(&pool).await?;
+    info!("✅ Database connection established");
+
+    // Create cache
+    info!("💾 Initializing cache...");
+    let cache = create_cache(&settings).await?;
+    info!("✅ Cache initialized");
+
+    // Create repository
+    let repository = Arc::new(TickDataRepository::new(pool, cache));
+
+    // Create exchange connection
+    info!("📡 Initializing exchange connection...");
+    let exchange = Arc::new(BinanceExchange::new());
+    info!("✅ Exchange connection ready");
+
+    // Create strategy
+    info!("🧠 Initializing strategy: {}", settings.paper_trading.strategy);
+    let strategy = crate::backtest::strategy::create_strategy(&settings.paper_trading.strategy)?;
+    info!("✅ Strategy initialized: {}", strategy.name());
+
+    // Create paper trading processor
+    let initial_capital = Decimal::try_from(settings.paper_trading.initial_capital)
+        .map_err(|e| format!("Invalid initial capital: {}", e))?;
+    let paper_trading = Arc::new(tokio::sync::Mutex::new(
+        PaperTradingProcessor::new(strategy, Arc::clone(&repository), initial_capital)
+    ));
+
+    // Create market data service
+    let service = MarketDataService::new(
+        exchange,
+        repository, 
+        settings.symbols.clone(),
+    ).with_paper_trading(paper_trading);
+
+    info!("🎯 Starting market data collection with paper trading for {} symbols", settings.symbols.len());
+    println!("🚀 Paper trading is now active! Watch for trading signals below...");
+    println!("📈 Strategy: {} | Initial Capital: ${}", settings.paper_trading.strategy, settings.paper_trading.initial_capital);
+    println!("{}", "=".repeat(80));
+
+    // Start service
+    run_live_application_with_service(service).await?;
+
+    info!("✅ Application stopped gracefully");
+    Ok(())
+}
+
+async fn run_live_application_with_service(service: MarketDataService) -> Result<(), Box<dyn std::error::Error>> {
+    let service_handle = tokio::spawn(async move {
+        service.start().await
+    });
+    
+    match tokio::time::timeout(Duration::from_secs(30), service_handle).await {
+        Ok(Ok(Ok(()))) => {
+            info!("✅ Service stopped successfully");
+        }
+        Ok(Ok(Err(e))) => {
+            error!("❌ Service stopped with error: {}", e);
+            return Err(Box::new(e));
+        }
+        Ok(Err(e)) => {
+            error!("❌ Service task panicked: {}", e);
+            std::process::exit(1);
+        }
+        Err(_) => {
+            warn!("⚠️  Service shutdown timeout, forcing exit");
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
 }
 
 /// Real-time mode entry
@@ -343,7 +466,7 @@ async fn run_live_application(settings: Settings) -> Result<(), Box<dyn std::err
     info!("✅ Cache initialized");
 
     // Create repository
-    let repository = TickDataRepository::new(pool, cache);
+    let repository = Arc::new(TickDataRepository::new(pool, cache));
 
     // Create exchange
     info!("📡 Initializing exchange connection...");

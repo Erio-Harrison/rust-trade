@@ -19,3 +19,8 @@ ttl_seconds = 300
 pool_size = 10
 ttl_seconds = 3600
 max_ticks_per_symbol = 10000
+
+[paper_trading]
+enabled = true
+strategy = "rsi"    
+initial_capital = 10000.0   

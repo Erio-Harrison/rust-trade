@@ -36,11 +36,19 @@ pub struct Cache {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct PaperTrading {
+    pub enabled: bool,
+    pub strategy: String,  
+    pub initial_capital: f64,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct Settings {
     pub database: Database,
     pub server: Server,
     pub cache: Cache,
     pub symbols: Vec<String>,
+    pub paper_trading: PaperTrading, 
 }
 
 impl Settings {

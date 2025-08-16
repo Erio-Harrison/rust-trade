@@ -21,9 +21,16 @@ Rust Trade combines high-performance market data processing with sophisticated b
          │                       │                       │
          │                       ▼                       ▼
     Binance API           ┌─────────────┐         ┌─────────────┐
-    - Real-time data      │   Cache     │         │ PostgreSQL  │
-    - Historical data     │ (L1 + L2)   │         │ Database    │
+    - Real-time data      │ Multi-Level │         │ PostgreSQL  │
+    - Paper trading       │    Cache    │         │ Database    │
+                          │ (L1 + L2)   │         │             │
                           └─────────────┘         └─────────────┘
+                                    │
+                                    ▼
+                          ┌─────────────────┐
+                          │ Paper Trading   │
+                          │    Engine       │
+                          └─────────────────┘
 ```
 
 ### **Desktop Application Mode**
@@ -46,16 +53,23 @@ Rust Trade combines high-performance market data processing with sophisticated b
 ```
 
 ## 📁 Project Structure
-
 ```
 rust-trade/
 ├── assets/                # Project assets and screenshots
 ├── config/                # Global configuration files
+│   ├── development.toml   # Development environment config
+│   ├── production.toml    # Production environment config
+│   └── test.toml          # Test environment config
 ├── frontend/              # Next.js frontend application
 │   ├── src/               # Frontend source code
 │   │   ├── app/           # App router pages
+│   │   │   ├── page.tsx   # Dashboard homepage
+│   │   │   └── backtest/  # Backtesting interface
 │   │   ├── components/    # Reusable UI components
-│   │   └── types/         # TypeScript definitions
+│   │   │   ├── layout/    # Layout components
+│   │   │   └── ui/        # shadcn/ui components
+│   │   └── types/         # TypeScript type definitions
+│   ├── tailwind.config.js # Tailwind CSS configuration
 │   └── package.json       # Frontend dependencies
 ├── src-tauri/             # Desktop application backend
 │   ├── src/               # Tauri command handlers and state management
@@ -64,18 +78,30 @@ rust-trade/
 │   │   ├── state.rs       # Application state management
 │   │   └── types.rs       # Frontend interface types
 │   ├── Cargo.toml         # Tauri dependencies
-│   └── README.md          # Tauri application documentation
+│   └── tauri.conf.json    # Tauri configuration
 ├── trading-core/          # Core Rust trading system
 │   ├── src/               # Trading engine source code
 │   │   ├── backtest/      # Backtesting engine and strategies
-│   │   ├── data/          # Data types and repository
+│   │   │   ├── engine.rs  # Core backtesting logic
+│   │   │   ├── metrics.rs # Performance calculations
+│   │   │   ├── portfolio.rs # Portfolio management
+│   │   │   └── strategy/  # Trading strategies (RSI, SMA)
+│   │   ├── data/          # Data layer
+│   │   │   ├── cache.rs   # Multi-level caching system
+│   │   │   ├── repository.rs # Database operations
+│   │   │   └── types.rs   # Core data structures
 │   │   ├── exchange/      # Exchange integrations
+│   │   │   └── binance.rs # Binance WebSocket client
+│   │   ├── live_trading/  # Paper trading system
+│   │   │   └── paper_trading.rs # Real-time strategy execution
 │   │   ├── service/       # Business logic layer
+│   │   │   └── market_data.rs # Data processing service
 │   │   ├── config.rs      # Configuration management
 │   │   ├── lib.rs         # Library entry point
 │   │   └── main.rs        # CLI application entry point
 │   ├── config/            # Configuration files
 │   ├── database/          # Database schema and migrations
+│   │   └── schema.sql     # PostgreSQL table definitions
 │   ├── benches/           # Performance benchmarks
 │   ├── Cargo.toml         # Core dependencies
 │   └── README.md          # Core system documentation
@@ -105,7 +131,7 @@ cd rust-trade
 createdb trading_core
 
 # Set up schema
-psql -d trading_core -f trading-core/database/schema.sql
+Run the SQL commands found in the config folder to create the database tables.
 ```
 
 ### 3. Environment Configuration
@@ -160,7 +186,10 @@ cd frontend && cargo tauri build
 cd trading-core
 
 # Start live data collection
-cargo run
+cargo run live
+
+# Start live data collection with paper trading
+cargo run live --paper-trading
 
 # Run backtesting interface
 cargo run backtest

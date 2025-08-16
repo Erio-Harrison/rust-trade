@@ -190,3 +190,16 @@ impl BacktestDataInfo {
             .unwrap_or(false)
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LiveStrategyLog {
+    pub timestamp: DateTime<Utc>,
+    pub strategy_id: String,
+    pub symbol: String,
+    pub current_price: Decimal,
+    pub signal_type: String, // BUY/SELL/HOLD
+    pub portfolio_value: Decimal,
+    pub total_pnl: Decimal,
+    pub cache_hit: bool,
+    pub processing_time_us: u64,
+}

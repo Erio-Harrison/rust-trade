@@ -1,7 +1,7 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
 use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, Mutex};
 use tokio::time::{interval, sleep};
 use tokio::{select, spawn};
 use tracing::{debug, error, info, warn};
@@ -9,6 +9,7 @@ use tracing::{debug, error, info, warn};
 use crate::data::{repository::TickDataRepository, cache:: TickDataCache};
 use crate::exchange::{Exchange, ExchangeError};
 use crate::data::types::TickData;
+use crate::live_trading::PaperTradingProcessor;
 use super::{ServiceError, BatchConfig, BatchStats, ProcessingMetrics};
 
 /// Market data service that coordinates between exchange and data storage
@@ -25,30 +26,38 @@ pub struct MarketDataService {
     shutdown_tx: broadcast::Sender<()>,
     /// Processing statistics
     stats: Arc<Mutex<BatchStats>>,
+    /// Paper trading processor 
+    paper_trading: Option<Arc<Mutex<PaperTradingProcessor>>>,
 }
 
 impl MarketDataService {
     /// Create a new market data service
     pub fn new(
         exchange: Arc<dyn Exchange>,
-        repository: TickDataRepository,
+        repository: Arc<TickDataRepository>,
         symbols: Vec<String>,
     ) -> Self {
         let (shutdown_tx, _) = broadcast::channel(16);
         
         Self {
             exchange,
-            repository: Arc::new(repository),  // Wrap in Arc
+            repository,
             symbols,
             batch_config: BatchConfig::default(),
             shutdown_tx,
             stats: Arc::new(Mutex::new(BatchStats::default())),
+            paper_trading: None,
         }
     }
     
     /// Create service with custom batch configuration
     pub fn with_batch_config(mut self, config: BatchConfig) -> Self {
         self.batch_config = config;
+        self
+    }
+
+    pub fn with_paper_trading(mut self, paper_trading: Arc<Mutex<PaperTradingProcessor>>) -> Self {
+        self.paper_trading = Some(paper_trading);
         self
     }
     
@@ -138,6 +147,7 @@ impl MarketDataService {
         let batch_config = self.batch_config.clone();
         let stats = Arc::clone(&self.stats);
         let mut shutdown_rx = self.shutdown_tx.subscribe();
+        let paper_trading = self.paper_trading.clone();
         
         let handle = spawn(async move {
             let mut batch_buffer = Vec::with_capacity(batch_config.max_batch_size);
@@ -150,18 +160,27 @@ impl MarketDataService {
                     tick_opt = tick_rx.recv() => {
                         match tick_opt {
                             Some(tick) => {
-                                // Update cache immediately (fire and forget)
+                                // Update cache immediately
                                 Self::update_cache_async(&repository, &tick, &stats).await;
+                                
+                                // Paper transaction processing
+                                if let Some(paper_trading_processor) = &paper_trading {
+                                    let mut processor = paper_trading_processor.lock().await;
+                                    if let Err(e) = processor.process_tick(&tick).await {
+                                        warn!("Paper trading processing failed: {}", e);
+                                    }
+                                }
                                 
                                 // Add to batch buffer
                                 batch_buffer.push(tick);
                                 
                                 // Update stats
-                                if let Ok(mut s) = stats.lock() {
+                                {
+                                    let mut s = stats.lock().await;
                                     s.total_ticks_processed += 1;
                                 }
-                                
-                                // Check if batch is full
+                            
+                                // Check if the batch is full
                                 if batch_buffer.len() >= batch_config.max_batch_size {
                                     Self::flush_batch_with_retry(
                                         &repository,
@@ -179,7 +198,6 @@ impl MarketDataService {
                         }
                     }
                     
-                    // Time-based flush trigger
                     _ = flush_timer.tick() => {
                         if !batch_buffer.is_empty() && last_flush.elapsed() >= Duration::from_secs(batch_config.max_batch_time) {
                             debug!("Time-based batch flush triggered (batch size: {})", batch_buffer.len());
@@ -192,8 +210,7 @@ impl MarketDataService {
                             last_flush = Instant::now();
                         }
                     }
-                    
-                    // Shutdown signal
+
                     _ = shutdown_rx.recv() => {
                         info!("Processing shutdown requested, flushing remaining data");
                         if !batch_buffer.is_empty() {
@@ -214,7 +231,7 @@ impl MarketDataService {
         
         Ok(handle)
     }
-    
+
     /// Update cache asynchronously (non-blocking)
     async fn update_cache_async(
         repository: &TickDataRepository,
@@ -225,14 +242,15 @@ impl MarketDataService {
             warn!("Failed to update cache for tick {}: {}", tick.trade_id, e);
             
             // Update failure stats
-            if let Ok(mut s) = stats.lock() {
+            {
+                let mut s = stats.lock().await;
                 s.cache_update_failures += 1;
             }
         } else {
             debug!("Cache updated for symbol: {}", tick.symbol);
         }
     }
-    
+
     /// Flush batch to database with retry logic
     async fn flush_batch_with_retry(
         repository: &TickDataRepository,
@@ -253,7 +271,8 @@ impl MarketDataService {
                     info!("Successfully flushed batch: {} ticks inserted", inserted_count);
                     
                     // Update success stats
-                    if let Ok(mut s) = stats.lock() {
+                    {
+                        let mut s = stats.lock().await;
                         s.total_batches_flushed += 1;
                         s.last_flush_time = Some(chrono::Utc::now());
                     }
@@ -266,16 +285,18 @@ impl MarketDataService {
                     error!("Batch insert failed (attempt {}/{}): {}", attempt, config.max_retry_attempts, e);
                     
                     // Update retry stats
-                    if let Ok(mut s) = stats.lock() {
+                    {
+                        let mut s = stats.lock().await;
                         s.total_retry_attempts += 1;
                     }
                     
                     if attempt >= config.max_retry_attempts {
                         error!("Batch insert failed after {} attempts, discarding {} ticks", 
-                               config.max_retry_attempts, batch_size);
+                            config.max_retry_attempts, batch_size);
                         
                         // Update failure stats
-                        if let Ok(mut s) = stats.lock() {
+                        {
+                            let mut s = stats.lock().await;
                             s.total_failed_batches += 1;
                         }
                         
@@ -318,10 +339,8 @@ impl MarketDataService {
     }
     
     /// Get processing metrics
-    pub fn get_metrics(&self) -> Result<ProcessingMetrics, ServiceError> {
-        let stats = self.stats.lock()
-            .map_err(|e| ServiceError::Task(format!("Failed to get stats: {}", e)))?
-            .clone();
+    pub async fn get_metrics(&self) -> Result<ProcessingMetrics, ServiceError> {
+        let stats = self.stats.lock().await.clone();
         
         let ticks_per_second = if let Some(last_flush) = stats.last_flush_time {
             let duration = chrono::Utc::now() - last_flush;
@@ -353,10 +372,8 @@ impl MarketDataService {
     }
     
     /// Get processing statistics
-    pub fn get_stats(&self) -> Result<BatchStats, ServiceError> {
-        self.stats.lock()
-            .map_err(|e| ServiceError::Task(format!("Failed to get stats: {}", e)))
-            .map(|s| s.clone())
+    pub async fn get_stats(&self) -> Result<BatchStats, ServiceError> {
+        Ok(self.stats.lock().await.clone())
     }
 }
 

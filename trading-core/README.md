@@ -160,16 +160,19 @@ src/
 │   ├── types.rs               # Service types (BatchConfig, metrics)
 │   ├── errors.rs              # Service error types
 │   └── market_data.rs         # Main data processing service
-└── backtest/                  # Backtesting system
-    ├── mod.rs                 # Module exports and public interface
-    ├── engine.rs              # Core backtesting engine and execution logic
-    ├── portfolio.rs           # Portfolio management, position tracking, P&L calculation
-    ├── metrics.rs             # Performance metrics calculation (Sharpe, drawdown, etc.)
-    └── strategy/              # Trading strategies
-        ├── mod.rs             # Strategy factory and management
-        ├── base.rs            # Strategy trait definition and interfaces
-        ├── sma.rs             # Simple Moving Average strategy
-        └── rsi.rs             # RSI (Relative Strength Index) strategy
+├── backtest/                  # Backtesting system
+│   ├── mod.rs                 # Module exports and public interface
+│   ├── engine.rs              # Core backtesting engine and execution logic
+│   ├── portfolio.rs           # Portfolio management, position tracking, P&L calculation
+│   ├── metrics.rs             # Performance metrics calculation (Sharpe, drawdown, etc.)
+│   └── strategy/              # Trading strategies
+│       ├── mod.rs             # Strategy factory and management
+│       ├── base.rs            # Strategy trait definition and interfaces
+│       ├── sma.rs             # Simple Moving Average strategy
+│       └── rsi.rs             # RSI (Relative Strength Index) strategy
+└── live_trading/              # Live trading system
+   ├── mod.rs                  # Module exports
+   └── paper_trading.rs        # Paper trading implementation
 ```
 
 ## ⚙️ Configuration
