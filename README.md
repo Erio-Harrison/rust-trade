@@ -136,7 +136,7 @@ Run the SQL commands found in the config folder to create the database tables.
 
 ### 3. Environment Configuration
 
-Create `.env` files in both root directory and `src-tauri/`:
+Create `.env` files in both root directory and `trading-core/`:
 
 ```bash
 # .env
@@ -163,6 +163,8 @@ cd src-tauri
 cargo build
 cd ..
 ```
+
+PS: 
 
 ## 🎮 Running the Application
 
