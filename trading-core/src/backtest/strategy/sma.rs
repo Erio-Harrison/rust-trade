@@ -34,10 +34,6 @@ impl Strategy for SmaStrategy {
         "Simple Moving Average"
     }
     
-    fn description(&self) -> &str {
-        "Trading strategy based on short and long-term moving average crossover"
-    }
-    
     fn initialize(&mut self, params: HashMap<String, String>) -> Result<(), String> {
         if let Some(short) = params.get("short_period") {
             self.short_period = short.parse().map_err(|_| "Invalid short_period")?;

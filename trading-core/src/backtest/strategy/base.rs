@@ -11,7 +11,6 @@ pub enum Signal {
 
 pub trait Strategy: Send + Sync {
     fn name(&self) -> &str;
-    fn description(&self) -> &str;
     fn on_tick(&mut self, tick: &TickData) -> Signal;
     fn initialize(&mut self, params: HashMap<String, String>) -> Result<(), String>;
     

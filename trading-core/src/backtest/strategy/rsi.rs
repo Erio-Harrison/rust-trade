@@ -50,10 +50,6 @@ impl Strategy for RsiStrategy {
         "RSI Strategy"
     }
     
-    fn description(&self) -> &str {
-        "Trading strategy based on Relative Strength Index (RSI)"
-    }
-    
     fn initialize(&mut self, params: HashMap<String, String>) -> Result<(), String> {
         if let Some(period) = params.get("period") {
             self.period = period.parse().map_err(|_| "Invalid period")?;
