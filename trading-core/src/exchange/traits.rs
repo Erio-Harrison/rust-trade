@@ -14,6 +14,7 @@ pub trait Exchange: Send + Sync {
         &self,
         symbols: &[String],
         callback: Box<dyn Fn(TickData) + Send + Sync>,
+        shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<(), ExchangeError>;
     
     /// Fetch historical trade data for a specific symbol and time range

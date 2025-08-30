@@ -60,6 +60,10 @@ impl MarketDataService {
         self.paper_trading = Some(paper_trading);
         self
     }
+
+    pub fn get_shutdown_tx(&self) -> broadcast::Sender<()> {
+        self.shutdown_tx.clone()
+    }
     
     /// Start the market data service
     pub async fn start(&self) -> Result<(), ServiceError> {
@@ -101,38 +105,57 @@ impl MarketDataService {
         
         let handle = spawn(async move {
             loop {
+                // Check for shutdown signal before attempting connection
+                if shutdown_rx.try_recv().is_ok() {
+                    info!("Data collection shutdown requested before connection attempt");
+                    break;
+                }
+                
                 // Create callback for tick data
                 let tick_tx_clone = tick_tx.clone();
                 let callback = Box::new(move |tick: TickData| {
                     let tx = tick_tx_clone.clone();
                     spawn(async move {
                         if let Err(e) = tx.send(tick).await {
-                            error!("Failed to send tick data to processing pipeline: {}", e);
+                            // Only log error if it's not a channel closed error during shutdown
+                            if !e.to_string().contains("channel closed") {
+                                error!("Failed to send tick data to processing pipeline: {}", e);
+                            }
                         }
                     });
                 });
                 
-                // Start subscription with automatic reconnection
-                select! {
-                    result = exchange.subscribe_trades(&symbols, callback) => {
-                        match result {
-                            Ok(()) => {
-                                info!("Exchange subscription completed normally");
+                // Start subscription with shutdown signal
+                match exchange.subscribe_trades(&symbols, callback, shutdown_rx.resubscribe()).await {
+                    Ok(()) => {
+                        info!("Exchange subscription completed normally");
+                        break; // Normal completion, exit loop
+                    }
+                    Err(e) => {
+                        error!("Exchange subscription failed: {}", e);
+                        
+                        // Check if shutdown was requested before attempting retry
+                        if shutdown_rx.try_recv().is_ok() {
+                            info!("Data collection shutdown requested, canceling retry");
+                            break;
+                        }
+                        
+                        warn!("Retrying exchange connection in 5 seconds...");
+                        
+                        select! {
+                            _ = sleep(Duration::from_secs(5)) => {
+                                continue; // Retry connection
                             }
-                            Err(e) => {
-                                error!("Exchange subscription failed: {}", e);
-                                warn!("Retrying exchange connection in 5 seconds...");
-                                sleep(Duration::from_secs(5)).await;
-                                continue;
+                            _ = shutdown_rx.recv() => {
+                                info!("Data collection shutdown requested during retry delay");
+                                break;
                             }
                         }
                     }
-                    _ = shutdown_rx.recv() => {
-                        info!("Data collection shutdown requested");
-                        break;
-                    }
                 }
             }
+            
+            info!("Data collection stopped");
         });
         
         Ok(handle)

@@ -2,6 +2,7 @@ use std::sync::{Arc};
 use std::time::Duration;
 use rust_decimal::Decimal;
 use sqlx::PgPool;
+use tokio::signal;
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -57,7 +58,6 @@ fn print_usage() {
     println!("  cargo run --help         # Show this help message");
     println!();
 }
-
 
 async fn run_live_with_paper_trading() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize application environment
@@ -144,29 +144,27 @@ async fn run_live_with_paper_trading() -> Result<(), Box<dyn std::error::Error>>
 }
 
 async fn run_live_application_with_service(service: MarketDataService) -> Result<(), Box<dyn std::error::Error>> {
-    let service_handle = tokio::spawn(async move {
-        service.start().await
+    let service_shutdown_tx = service.get_shutdown_tx();
+    
+    // Start signal forwarding task
+    tokio::spawn(async move {
+        signal::ctrl_c().await.expect("Failed to listen for ctrl-c");
+        println!("\nReceived Ctrl+C signal, forwarding to service...");
+        info!("Received Ctrl+C signal, forwarding to service");
+        let _ = service_shutdown_tx.send(());
     });
     
-    match tokio::time::timeout(Duration::from_secs(30), service_handle).await {
-        Ok(Ok(Ok(()))) => {
-            info!("✅ Service stopped successfully");
+    // Just wait for service to complete
+    match service.start().await {
+        Ok(()) => {
+            info!("Service stopped successfully");
+            Ok(())
         }
-        Ok(Ok(Err(e))) => {
-            error!("❌ Service stopped with error: {}", e);
-            return Err(Box::new(e));
-        }
-        Ok(Err(e)) => {
-            error!("❌ Service task panicked: {}", e);
-            std::process::exit(1);
-        }
-        Err(_) => {
-            warn!("⚠️  Service shutdown timeout, forcing exit");
-            std::process::exit(1);
+        Err(e) => {
+            error!("Service stopped with error: {}", e);
+            Err(Box::new(e))
         }
     }
-
-    Ok(())
 }
 
 /// Real-time mode entry
@@ -480,31 +478,26 @@ async fn run_live_application(settings: Settings) -> Result<(), Box<dyn std::err
 
     info!("🎯 Starting market data collection for {} symbols", settings.symbols.len());
 
-    // Start service in background task
-    let service_handle = tokio::spawn(async move {
-        service.start().await
+    // Setup signal forwarding to service
+    let service_shutdown_tx = service.get_shutdown_tx();
+    tokio::spawn(async move {
+        signal::ctrl_c().await.expect("Failed to listen for ctrl-c");
+        println!("\nReceived Ctrl+C signal, forwarding to service...");
+        info!("Received Ctrl+C signal, forwarding to service");
+        let _ = service_shutdown_tx.send(());
     });
-    
-    // Wait for service to complete with timeout
-    match tokio::time::timeout(Duration::from_secs(30), service_handle).await {
-        Ok(Ok(Ok(()))) => {
+
+    // Start service and wait for completion
+    match service.start().await {
+        Ok(()) => {
             info!("✅ Service stopped successfully");
+            Ok(())
         }
-        Ok(Ok(Err(e))) => {
+        Err(e) => {
             error!("❌ Service stopped with error: {}", e);
-            return Err(Box::new(e));
-        }
-        Ok(Err(e)) => {
-            error!("❌ Service task panicked: {}", e);
-            std::process::exit(1);
-        }
-        Err(_) => {
-            warn!("⚠️  Service shutdown timeout, forcing exit");
-            std::process::exit(1);
+            Err(Box::new(e))
         }
     }
-
-    Ok(())
 }
 
 /// Create database connection pool

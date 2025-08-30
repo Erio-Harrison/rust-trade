@@ -70,6 +70,7 @@ impl BinanceExchange {
         &self,
         symbols: &[String],
         callback: Box<dyn Fn(TickData) + Send + Sync>,
+        mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<(), ExchangeError> {
         let streams = build_binance_trade_streams(symbols)?;
         info!("Connecting to Binance WebSocket with {} streams", streams.len());
@@ -78,11 +79,21 @@ impl BinanceExchange {
         const MAX_RECONNECT_ATTEMPTS: u32 = 10;
         
         loop {
-            match self.connect_and_subscribe(&streams, &callback).await {
+            // Check for shutdown signal before each connection attempt
+            if shutdown_rx.try_recv().is_ok() {
+                info!("Shutdown signal received, stopping WebSocket connection attempts");
+                return Ok(());
+            }
+            
+            match self.connect_and_subscribe(&streams, &callback, shutdown_rx.resubscribe()).await {
                 Ok(()) => {
                     // Reset reconnect attempts on successful connection
                     reconnect_attempts = 0;
-                    info!("WebSocket connection ended normally");
+                    info!("WebSocket connection ended normally - checking if shutdown was requested");
+                    
+                    // If connection ended normally, it's likely due to shutdown signal
+                    // Exit the reconnection loop
+                    return Ok(());
                 }
                 Err(e) => {
                     reconnect_attempts += 1;
@@ -95,7 +106,18 @@ impl BinanceExchange {
                     }
                     
                     warn!("Attempting to reconnect in {:?}...", RECONNECT_DELAY);
-                    sleep(RECONNECT_DELAY).await;
+                    
+                    // Wait for reconnect delay or shutdown signal
+                    tokio::select! {
+                        _ = sleep(RECONNECT_DELAY) => {
+                            // Continue to retry
+                            continue;
+                        }
+                        _ = shutdown_rx.recv() => {
+                            info!("Shutdown signal received during reconnect delay");
+                            return Ok(());
+                        }
+                    }
                 }
             }
         }
@@ -106,6 +128,7 @@ impl BinanceExchange {
         &self,
         streams: &[String],
         callback: &Box<dyn Fn(TickData) + Send + Sync>,
+        mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<(), ExchangeError> {
         // Establish WebSocket connection
         let (ws_stream, _) = connect_async(&self.ws_url).await
@@ -126,44 +149,45 @@ impl BinanceExchange {
         info!("Subscription sent for {} streams", streams.len());
         
         // Message processing loop
-        while let Some(msg) = read.next().await {
-            match msg.map_err(|e| ExchangeError::WebSocketError(e.to_string()))? {
-                Message::Text(text) => {
-                    match self.parse_trade_message(&text) {
-                        Ok(tick_data) => {
-                            debug!("Received trade: symbol={}, price={}, quantity={}", 
-                                   tick_data.symbol, tick_data.price, tick_data.quantity);
-                            callback(tick_data);
+        loop {
+            tokio::select! {
+                msg = read.next() => {
+                    match msg {
+                        Some(Ok(Message::Text(text))) => {
+                            // 处理文本消息
+                            match self.parse_trade_message(&text) {
+                                Ok(tick_data) => callback(tick_data),
+                                Err(e) => warn!("Parse error: {}", e),
+                            }
                         }
-                        Err(ExchangeError::ParseError(msg)) if msg.contains("Control message") => {
-                            // Ignore control messages (subscription confirmations, etc.)
-                            continue;
+                        Some(Ok(Message::Ping(ping))) => {
+                            write.send(Message::Pong(ping)).await?;
                         }
-                        Err(e) => {
-                            warn!("Failed to parse trade message: {}. Raw message: {}", e, text);
-                            // Continue processing other messages instead of breaking
-                            continue;
+                        Some(Ok(Message::Close(_))) => {
+                            info!("WebSocket closed by server");
+                            break;
                         }
+                        Some(Err(e)) => {
+                            return Err(ExchangeError::WebSocketError(e.to_string()));
+                        }
+                        None => {
+                            info!("WebSocket stream ended");
+                            break;
+                        }
+                        _ => continue,
                     }
                 }
-                Message::Ping(ping) => {
-                    debug!("Received ping, sending pong");
-                    write.send(Message::Pong(ping)).await
-                        .map_err(|e| ExchangeError::WebSocketError(format!("Failed to send pong: {}", e)))?;
-                }
-                Message::Pong(_) => {
-                    debug!("Received pong");
-                }
-                Message::Close(_) => {
-                    info!("WebSocket connection closed by server");
+                _ = shutdown_rx.recv() => {
+                    info!("Shutdown signal received, closing WebSocket gracefully");
+                    // 发送 Close frame 给服务器
+                    if let Err(e) = write.send(Message::Close(None)).await {
+                        warn!("Failed to send close frame: {}", e);
+                    }
                     break;
-                }
-                _ => {
-                    debug!("Received unexpected message type");
                 }
             }
         }
-        
+
         Ok(())
     }
 
@@ -238,6 +262,7 @@ impl Exchange for BinanceExchange {
         &self,
         symbols: &[String],
         callback: Box<dyn Fn(TickData) + Send + Sync>,
+        shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<(), ExchangeError> {
         if symbols.is_empty() {
             return Err(ExchangeError::InvalidSymbol("No symbols provided".to_string()));
@@ -246,7 +271,7 @@ impl Exchange for BinanceExchange {
         info!("Starting Binance trade subscription for symbols: {:?}", symbols);
         
         // This will run indefinitely with reconnection logic
-        self.handle_websocket_connection(symbols, callback).await
+        self.handle_websocket_connection(symbols, callback,shutdown_rx.resubscribe()).await
     }
 
     async fn get_historical_trades(
