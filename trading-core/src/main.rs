@@ -360,7 +360,6 @@ async fn run_backtest_interactive(
     
     println!("\n🔍 Loading historical data: {} latest {} records...", symbol, data_count);
     
-    // 加载数据
     let data = repository.get_recent_ticks_for_backtest(&symbol, data_count).await?;
     
     if data.is_empty() {
