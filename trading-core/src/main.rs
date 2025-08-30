@@ -2,7 +2,6 @@ use std::sync::{Arc};
 use std::time::Duration;
 use rust_decimal::Decimal;
 use sqlx::PgPool;
-use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
