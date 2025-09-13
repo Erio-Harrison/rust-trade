@@ -1,13 +1,16 @@
-use std::collections::HashMap;
-use chrono::{DateTime, Utc, Duration, Timelike, Datelike, Weekday};
+use chrono::{DateTime, Datelike, Duration, Timelike, Utc, Weekday};
 use rust_decimal::Decimal;
-use sqlx::{PgPool, Row, QueryBuilder, Postgres};
+use sqlx::{PgPool, Postgres, QueryBuilder, Row};
+use std::collections::HashMap;
 use tracing::{debug, error, info, warn};
 
 use crate::data::types::{LiveStrategyLog, OHLCData, Timeframe};
 
-use super::types::{TickData, TradeSide, TickQuery, DataResult, DataError, BacktestDataInfo, DbStats, SymbolDataInfo };
-use super::cache::{TieredCache, TickDataCache};
+use super::cache::{TickDataCache, TieredCache};
+use super::types::{
+    BacktestDataInfo, DataError, DataResult, DbStats, SymbolDataInfo, TickData, TickQuery,
+    TradeSide,
+};
 
 // =================================================================
 // Constants and Configuration
@@ -16,7 +19,6 @@ use super::cache::{TieredCache, TickDataCache};
 const DEFAULT_QUERY_LIMIT: u32 = 1000;
 const MAX_QUERY_LIMIT: u32 = 10000;
 const MAX_BATCH_SIZE: usize = 1000;
-
 
 // =================================================================
 // Repository Implementation
@@ -51,10 +53,12 @@ impl TickDataRepository {
     /// Insert single tick data
     pub async fn insert_tick(&self, tick: &TickData) -> DataResult<()> {
         self.validate_tick_data(tick)?;
-        
-        debug!("Inserting tick: symbol={}, price={}, trade_id={}", 
-               tick.symbol, tick.price, tick.trade_id);
-        
+
+        debug!(
+            "Inserting tick: symbol={}, price={}, trade_id={}",
+            tick.symbol, tick.price, tick.trade_id
+        );
+
         // Insert to database first
         sqlx::query!(
             r#"
@@ -116,8 +120,10 @@ impl TickDataRepository {
             }
         }
 
-        info!("Successfully batch inserted {} out of {} tick records", 
-              total_inserted, total_count);
+        info!(
+            "Successfully batch inserted {} out of {} tick records",
+            total_inserted, total_count
+        );
         Ok(total_inserted)
     }
 
@@ -156,15 +162,24 @@ impl TickDataRepository {
 
     /// Get tick data based on query parameters
     pub async fn get_ticks(&self, query: &TickQuery) -> DataResult<Vec<TickData>> {
-        let limit = query.limit.unwrap_or(DEFAULT_QUERY_LIMIT).min(MAX_QUERY_LIMIT);
-        
+        let limit = query
+            .limit
+            .unwrap_or(DEFAULT_QUERY_LIMIT)
+            .min(MAX_QUERY_LIMIT);
+
         debug!("Querying ticks: symbol={}, limit={}", query.symbol, limit);
 
         // Try cache first for recent data
         if self.is_recent_query(query) {
-            let cached_ticks = self.cache.get_recent_ticks(&query.symbol, limit as usize).await?;
+            let cached_ticks = self
+                .cache
+                .get_recent_ticks(&query.symbol, limit as usize)
+                .await?;
             if cached_ticks.len() == limit as usize {
-                debug!("Cache hit: retrieved {} ticks from cache", cached_ticks.len());
+                debug!(
+                    "Cache hit: retrieved {} ticks from cache",
+                    cached_ticks.len()
+                );
                 return Ok(cached_ticks);
             }
         }
@@ -185,7 +200,10 @@ impl TickDataRepository {
 
     /// Query ticks directly from database
     async fn query_ticks_from_db(&self, query: &TickQuery) -> DataResult<Vec<TickData>> {
-        let limit = query.limit.unwrap_or(DEFAULT_QUERY_LIMIT).min(MAX_QUERY_LIMIT);
+        let limit = query
+            .limit
+            .unwrap_or(DEFAULT_QUERY_LIMIT)
+            .min(MAX_QUERY_LIMIT);
 
         let mut sql_query = QueryBuilder::new(
             "SELECT timestamp, symbol, price, quantity, side, trade_id, is_buyer_maker FROM tick_data WHERE symbol = "
@@ -205,7 +223,9 @@ impl TickDataRepository {
             sql_query.push(" AND side = ").push_bind(side.as_db_str());
         }
 
-        sql_query.push(" ORDER BY timestamp DESC LIMIT ").push_bind(limit as i64);
+        sql_query
+            .push(" ORDER BY timestamp DESC LIMIT ")
+            .push_bind(limit as i64);
 
         let rows = sql_query.build().fetch_all(&self.pool).await?;
 
@@ -230,7 +250,7 @@ impl TickDataRepository {
     /// Get latest price for a symbol
     pub async fn get_latest_price(&self, symbol: &str) -> DataResult<Option<Decimal>> {
         debug!("Fetching latest price for symbol: {}", symbol);
-        
+
         // Try cache first
         let cached_ticks = self.cache.get_recent_ticks(symbol, 1).await?;
         if let Some(latest_tick) = cached_ticks.first() {
@@ -258,7 +278,10 @@ impl TickDataRepository {
     }
 
     /// Get latest prices for multiple symbols
-    pub async fn get_latest_prices(&self, symbols: &[String]) -> DataResult<HashMap<String, Decimal>> {
+    pub async fn get_latest_prices(
+        &self,
+        symbols: &[String],
+    ) -> DataResult<HashMap<String, Decimal>> {
         if symbols.is_empty() {
             return Ok(HashMap::new());
         }
@@ -316,9 +339,9 @@ impl TickDataRepository {
         count: i64,
     ) -> DataResult<Vec<TickData>> {
         debug!("Fetching {} recent ticks for backtest: {}", count, symbol);
-        
+
         let limit = count.min(MAX_QUERY_LIMIT as i64);
-        
+
         let rows = sqlx::query!(
             r#"
             SELECT timestamp, symbol, price, quantity, side, trade_id, is_buyer_maker
@@ -351,7 +374,7 @@ impl TickDataRepository {
 
         let mut ticks = ticks?;
         ticks.reverse(); // Reverse to get chronological order (ASC)
-        
+
         debug!("Retrieved {} ticks for backtest", ticks.len());
         Ok(ticks)
     }
@@ -364,11 +387,15 @@ impl TickDataRepository {
         end_time: DateTime<Utc>,
         limit: Option<i64>,
     ) -> DataResult<Vec<TickData>> {
-        debug!("Fetching historical data for backtest: {} from {} to {}", 
-               symbol, start_time, end_time);
-        
-        let query_limit = limit.unwrap_or(MAX_QUERY_LIMIT as i64).min(MAX_QUERY_LIMIT as i64);
-        
+        debug!(
+            "Fetching historical data for backtest: {} from {} to {}",
+            symbol, start_time, end_time
+        );
+
+        let query_limit = limit
+            .unwrap_or(MAX_QUERY_LIMIT as i64)
+            .min(MAX_QUERY_LIMIT as i64);
+
         let rows = sqlx::query!(
             r#"
             SELECT timestamp, symbol, price, quantity, side, trade_id, is_buyer_maker
@@ -410,7 +437,7 @@ impl TickDataRepository {
     /// Get backtest data information for user selection
     pub async fn get_backtest_data_info(&self) -> DataResult<BacktestDataInfo> {
         debug!("Fetching backtest data information");
-        
+
         // Get overall statistics
         let overall_stats = sqlx::query!(
             r#"
@@ -463,11 +490,12 @@ impl TickDataRepository {
             symbol_info,
         };
 
-        debug!("Backtest data info: {} total records, {} symbols", 
-               info.total_records, info.symbols_count);
+        debug!(
+            "Backtest data info: {} total records, {} symbols",
+            info.total_records, info.symbols_count
+        );
         Ok(info)
     }
-
 
     // =================================================================
     // Maintenance Operations
@@ -476,7 +504,7 @@ impl TickDataRepository {
     /// Clean up old tick data
     pub async fn cleanup_old_data(&self, days_to_keep: f64) -> DataResult<u64> {
         info!("Cleaning up tick data older than {} days", days_to_keep);
-        
+
         let result = sqlx::query!(
             r#"
             WITH deleted AS (
@@ -513,8 +541,12 @@ impl TickDataRepository {
             )
             .fetch_one(&self.pool)
             .await?;
-            
-            (row.total_records, row.earliest_timestamp, row.latest_timestamp)
+
+            (
+                row.total_records,
+                row.earliest_timestamp,
+                row.latest_timestamp,
+            )
         } else {
             let row = sqlx::query!(
                 r#"
@@ -527,8 +559,12 @@ impl TickDataRepository {
             )
             .fetch_one(&self.pool)
             .await?;
-            
-            (row.total_records, row.earliest_timestamp, row.latest_timestamp)
+
+            (
+                row.total_records,
+                row.earliest_timestamp,
+                row.latest_timestamp,
+            )
         };
 
         Ok(DbStats {
@@ -548,15 +584,15 @@ impl TickDataRepository {
         if tick.symbol.is_empty() {
             return Err(DataError::Validation("Symbol cannot be empty".into()));
         }
-        
+
         if tick.price <= Decimal::ZERO {
             return Err(DataError::Validation("Price must be positive".into()));
         }
-        
+
         if tick.quantity <= Decimal::ZERO {
             return Err(DataError::Validation("Quantity must be positive".into()));
         }
-        
+
         if tick.trade_id.is_empty() {
             return Err(DataError::Validation("Trade ID cannot be empty".into()));
         }
@@ -569,7 +605,10 @@ impl TickDataRepository {
         match side_str.to_uppercase().as_str() {
             "BUY" => Ok(TradeSide::Buy),
             "SELL" => Ok(TradeSide::Sell),
-            _ => Err(DataError::InvalidFormat(format!("Invalid trade side: {}", side_str))),
+            _ => Err(DataError::InvalidFormat(format!(
+                "Invalid trade side: {}",
+                side_str
+            ))),
         }
     }
 
@@ -606,7 +645,7 @@ impl TickDataRepository {
         )
         .execute(&self.pool)
         .await?;
-        
+
         Ok(())
     }
 
@@ -619,20 +658,27 @@ impl TickDataRepository {
         end_time: DateTime<Utc>,
         limit: Option<i64>,
     ) -> DataResult<Vec<OHLCData>> {
-        debug!("Generating OHLC data: {} {} from {} to {}", 
-               symbol, timeframe.as_str(), start_time, end_time);
+        debug!(
+            "Generating OHLC data: {} {} from {} to {}",
+            symbol,
+            timeframe.as_str(),
+            start_time,
+            end_time
+        );
 
         // Align start and end times to timeframe boundaries
         let aligned_start = timeframe.align_timestamp(start_time);
         let aligned_end = timeframe.align_timestamp(end_time);
 
         // Query all ticks in the time range
-        let ticks = self.get_historical_data_for_backtest(
-            symbol, 
-            aligned_start, 
-            aligned_end + timeframe.as_duration(), // Extend to include the last window
-            limit
-        ).await?;
+        let ticks = self
+            .get_historical_data_for_backtest(
+                symbol,
+                aligned_start,
+                aligned_end + timeframe.as_duration(), // Extend to include the last window
+                limit,
+            )
+            .await?;
 
         if ticks.is_empty() {
             debug!("No ticks found for OHLC generation");
@@ -641,10 +687,13 @@ impl TickDataRepository {
 
         // Group ticks by time windows
         let mut windows: HashMap<DateTime<Utc>, Vec<TickData>> = HashMap::new();
-        
+
         for tick in ticks {
             let window_start = timeframe.align_timestamp(tick.timestamp);
-            windows.entry(window_start).or_insert_with(Vec::new).push(tick);
+            windows
+                .entry(window_start)
+                .or_insert_with(Vec::new)
+                .push(tick);
         }
 
         // Convert each window to OHLC
@@ -664,51 +713,151 @@ impl TickDataRepository {
         // Sort OHLC data by timestamp
         ohlc_data.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
 
-        debug!("Generated {} OHLC candles for {} {}", 
-               ohlc_data.len(), symbol, timeframe.as_str());
-        
+        debug!(
+            "Generated {} OHLC candles for {} {}",
+            ohlc_data.len(),
+            symbol,
+            timeframe.as_str()
+        );
+
         Ok(ohlc_data)
     }
 
-    /// Generate recent OHLC data for backtesting (count-based)
+    // Time-based query operations for OHLC generation
+
+    /// Get ticks for a specific time duration (ordered by time ASC)
+    pub async fn get_ticks_for_timespan(
+        &self,
+        symbol: &str,
+        duration_hours: i64,
+    ) -> DataResult<Vec<TickData>> {
+        let end_time = Utc::now();
+        let start_time = end_time - Duration::hours(duration_hours);
+
+        let rows = sqlx::query!(
+            r#"
+        SELECT timestamp, symbol, price, quantity, side, trade_id, is_buyer_maker
+        FROM tick_data 
+        WHERE symbol = $1
+        AND timestamp >= $2 
+        AND timestamp <= $3
+        ORDER BY timestamp ASC
+        "#,
+            symbol,
+            start_time,
+            end_time
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let ticks: DataResult<Vec<TickData>> = rows
+            .iter()
+            .map(|row| {
+                Ok(TickData {
+                    timestamp: row.timestamp,
+                    symbol: row.symbol.clone(),
+                    price: row.price,
+                    quantity: row.quantity,
+                    side: self.parse_trade_side(&row.side)?,
+                    trade_id: row.trade_id.clone(),
+                    is_buyer_maker: row.is_buyer_maker,
+                })
+            })
+            .collect();
+
+        ticks
+    }
+
+    /// Get ticks for a specific time duration with record limit
+    pub async fn get_ticks_for_timespan_limited(
+        &self,
+        symbol: &str,
+        duration_hours: i64,
+        max_records: i64,
+    ) -> DataResult<Vec<TickData>> {
+        let end_time = Utc::now();
+        let start_time = end_time - Duration::hours(duration_hours);
+        let limit = max_records.min(MAX_QUERY_LIMIT as i64);
+
+        let rows = sqlx::query!(
+            r#"
+        SELECT timestamp, symbol, price, quantity, side, trade_id, is_buyer_maker
+        FROM tick_data 
+        WHERE symbol = $1
+        AND timestamp >= $2 
+        AND timestamp <= $3
+        ORDER BY timestamp ASC
+        LIMIT $4
+        "#,
+            symbol,
+            start_time,
+            end_time,
+            limit
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let ticks: DataResult<Vec<TickData>> = rows
+            .iter()
+            .map(|row| {
+                Ok(TickData {
+                    timestamp: row.timestamp,
+                    symbol: row.symbol.clone(),
+                    price: row.price,
+                    quantity: row.quantity,
+                    side: self.parse_trade_side(&row.side)?,
+                    trade_id: row.trade_id.clone(),
+                    is_buyer_maker: row.is_buyer_maker,
+                })
+            })
+            .collect();
+
+        ticks
+    }
+
+    /// Generate recent OHLC data for backtesting with time-based approach
     pub async fn generate_recent_ohlc_for_backtest(
         &self,
         symbol: &str,
         timeframe: Timeframe,
         candle_count: u32,
     ) -> DataResult<Vec<OHLCData>> {
-        debug!("Generating recent {} OHLC candles for backtest: {} {}", 
-               candle_count, symbol, timeframe.as_str());
+        // Calculate required time duration
+        let duration_hours = calculate_required_duration_hours(timeframe, candle_count);
 
-        // Estimate how many ticks we need to get the required candles
-        // This is a rough estimate - we might need to adjust
-        let estimated_ticks_needed = (candle_count as i64) * 100; // Assume ~100 ticks per candle
-        
-        let recent_ticks = self.get_recent_ticks_for_backtest(symbol, estimated_ticks_needed).await?;
-        
+        // Set reasonable limits for different timeframes
+        let max_ticks = match timeframe {
+            Timeframe::OneMinute | Timeframe::FiveMinutes => 50000,
+            Timeframe::FifteenMinutes | Timeframe::ThirtyMinutes => 100000,
+            Timeframe::OneHour => 200000,
+            Timeframe::FourHours => 500000,
+            Timeframe::OneDay => 1000000,
+            Timeframe::OneWeek => 2000000,
+        };
+
+        // Get ticks for the calculated time duration
+        let recent_ticks = self
+            .get_ticks_for_timespan_limited(symbol, duration_hours, max_ticks)
+            .await?;
+
         if recent_ticks.is_empty() {
             return Ok(Vec::new());
         }
 
-        // Get the time range from the actual data
+        // Use actual data time range for OHLC generation
         let start_time = recent_ticks[0].timestamp;
         let end_time = recent_ticks[recent_ticks.len() - 1].timestamp;
-        
-        // Generate OHLC from the time range
-        let mut ohlc_data = self.generate_ohlc_from_ticks(
-            symbol,
-            timeframe,
-            start_time,
-            end_time,
-            None
-        ).await?;
 
-        // Take only the requested number of recent candles
-        ohlc_data.sort_by(|a, b| b.timestamp.cmp(&a.timestamp)); // Latest first
+        // Generate OHLC data from tick data
+        let mut ohlc_data = self
+            .generate_ohlc_from_ticks(symbol, timeframe, start_time, end_time, None)
+            .await?;
+
+        // Sort by timestamp descending and take requested count
+        ohlc_data.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
         ohlc_data.truncate(candle_count as usize);
-        ohlc_data.reverse(); // Reverse to chronological order for backtesting
+        ohlc_data.reverse(); // Return in chronological order
 
-        debug!("Generated {} recent OHLC candles for backtest", ohlc_data.len());
         Ok(ohlc_data)
     }
 
@@ -720,39 +869,66 @@ impl TickDataRepository {
     ) -> DataResult<(u64, Option<DateTime<Utc>>, Option<DateTime<Utc>>)> {
         // Get basic tick data info first
         let stats = self.get_db_stats(Some(symbol)).await?;
-        
+
         if let (Some(earliest), Some(latest)) = (stats.earliest_timestamp, stats.latest_timestamp) {
             // Align to timeframe boundaries
             let aligned_earliest = timeframe.align_timestamp(earliest);
             let aligned_latest = timeframe.align_timestamp(latest);
-            
+
             // Calculate approximate number of candles
             let duration_diff = aligned_latest - aligned_earliest;
             let timeframe_duration = timeframe.as_duration();
-            
+
             let estimated_candles = if timeframe_duration.num_seconds() > 0 {
                 (duration_diff.num_seconds() / timeframe_duration.num_seconds()) as u64
             } else {
                 0
             };
 
-            Ok((estimated_candles, Some(aligned_earliest), Some(aligned_latest)))
+            Ok((
+                estimated_candles,
+                Some(aligned_earliest),
+                Some(aligned_latest),
+            ))
         } else {
             Ok((0, None, None))
         }
-    }   
+    }
+}
+
+/// Calculate required time duration based on timeframe and candle count
+fn calculate_required_duration_hours(timeframe: Timeframe, candle_count: u32) -> i64 {
+    let base_hours = match timeframe {
+        Timeframe::OneMinute => 1,
+        Timeframe::FiveMinutes => 1,
+        Timeframe::FifteenMinutes => 1,
+        Timeframe::ThirtyMinutes => 1,
+        Timeframe::OneHour => 1,
+        Timeframe::FourHours => 4,
+        Timeframe::OneDay => 24,
+        Timeframe::OneWeek => 24 * 7,
+    };
+
+    // Add 20% buffer for data gaps
+    let total_hours = (base_hours * candle_count as i64) as f64 * 1.2;
+    total_hours.ceil() as i64
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::{Duration, Utc};
-    use rust_decimal::Decimal;
-    use std::str::FromStr;
     use dotenv::dotenv;
+    use rust_decimal::Decimal;
     use std::env;
+    use std::str::FromStr;
 
-    fn create_test_tick(symbol: &str, price: &str, trade_id: &str, timestamp: Option<DateTime<Utc>>) -> TickData {
+    fn create_test_tick(
+        symbol: &str,
+        price: &str,
+        trade_id: &str,
+        timestamp: Option<DateTime<Utc>>,
+    ) -> TickData {
         TickData::new(
             timestamp.unwrap_or_else(Utc::now),
             symbol.to_string(),
@@ -766,10 +942,8 @@ mod tests {
 
     async fn create_repository() -> TickDataRepository {
         dotenv().ok();
-        let database_url = env::var("DATABASE_URL")
-            .expect("DATABASE_URL must be set in .env file");
-        let redis_url = env::var("REDIS_URL")
-            .expect("REDIS_URL must be set in .env file");
+        let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set in .env file");
+        let redis_url = env::var("REDIS_URL").expect("REDIS_URL must be set in .env file");
         let pool = PgPool::connect(&database_url)
             .await
             .expect("Failed to connect to database");
@@ -797,7 +971,9 @@ mod tests {
 
         // Insert a single tick
         let tick = create_test_tick(symbol, "50000.0", "test1", None);
-        repo.insert_tick(&tick).await.expect("Failed to insert tick");
+        repo.insert_tick(&tick)
+            .await
+            .expect("Failed to insert tick");
 
         // Query the tick
         let query = TickQuery {
@@ -836,7 +1012,10 @@ mod tests {
         ];
 
         // Batch insert
-        let inserted_count = repo.batch_insert(ticks.clone()).await.expect("Failed to batch insert");
+        let inserted_count = repo
+            .batch_insert(ticks.clone())
+            .await
+            .expect("Failed to batch insert");
         assert_eq!(inserted_count, 3);
 
         // Query ticks
@@ -851,9 +1030,15 @@ mod tests {
 
         // Verify
         assert_eq!(queried_ticks.len(), 3);
-        assert!(queried_ticks.iter().any(|t| t.trade_id == "batch1" && t.price == Decimal::from_str("50000.0").unwrap()));
-        assert!(queried_ticks.iter().any(|t| t.trade_id == "batch2" && t.price == Decimal::from_str("51000.0").unwrap()));
-        assert!(queried_ticks.iter().any(|t| t.trade_id == "batch3" && t.price == Decimal::from_str("52000.0").unwrap()));
+        assert!(queried_ticks
+            .iter()
+            .any(|t| t.trade_id == "batch1" && t.price == Decimal::from_str("50000.0").unwrap()));
+        assert!(queried_ticks
+            .iter()
+            .any(|t| t.trade_id == "batch2" && t.price == Decimal::from_str("51000.0").unwrap()));
+        assert!(queried_ticks
+            .iter()
+            .any(|t| t.trade_id == "batch3" && t.price == Decimal::from_str("52000.0").unwrap()));
 
         // Clean up
         cleanup_database(pool, symbol).await;
@@ -868,14 +1053,22 @@ mod tests {
 
         // Clean up before test
         cleanup_database(pool, symbol).await;
-        cache.clear_symbol(symbol).await.expect("Failed to clear cache");
+        cache
+            .clear_symbol(symbol)
+            .await
+            .expect("Failed to clear cache");
 
         // Insert a tick
         let tick = create_test_tick(symbol, "50000.0", "cache1", None);
-        repo.insert_tick(&tick).await.expect("Failed to insert tick");
+        repo.insert_tick(&tick)
+            .await
+            .expect("Failed to insert tick");
 
         // Query from cache
-        let cached_ticks = cache.get_recent_ticks(symbol, 1).await.expect("Failed to read from cache");
+        let cached_ticks = cache
+            .get_recent_ticks(symbol, 1)
+            .await
+            .expect("Failed to read from cache");
         assert_eq!(cached_ticks.len(), 1);
         assert_eq!(cached_ticks[0].symbol, symbol);
         assert_eq!(cached_ticks[0].price, Decimal::from_str("50000.0").unwrap());
@@ -896,7 +1089,10 @@ mod tests {
 
         // Clean up
         cleanup_database(pool, symbol).await;
-        cache.clear_symbol(symbol).await.expect("Failed to clear cache");
+        cache
+            .clear_symbol(symbol)
+            .await
+            .expect("Failed to clear cache");
     }
 
     #[tokio::test]
@@ -911,12 +1107,24 @@ mod tests {
         // Insert ticks with different timestamps
         let base_time = Utc::now();
         let tick1 = create_test_tick(symbol, "50000.0", "price1", Some(base_time));
-        let tick2 = create_test_tick(symbol, "51000.0", "price2", Some(base_time + Duration::seconds(1)));
-        repo.insert_tick(&tick1).await.expect("Failed to insert tick1");
-        repo.insert_tick(&tick2).await.expect("Failed to insert tick2");
+        let tick2 = create_test_tick(
+            symbol,
+            "51000.0",
+            "price2",
+            Some(base_time + Duration::seconds(1)),
+        );
+        repo.insert_tick(&tick1)
+            .await
+            .expect("Failed to insert tick1");
+        repo.insert_tick(&tick2)
+            .await
+            .expect("Failed to insert tick2");
 
         // Query latest price
-        let price = repo.get_latest_price(symbol).await.expect("Failed to get latest price");
+        let price = repo
+            .get_latest_price(symbol)
+            .await
+            .expect("Failed to get latest price");
         assert_eq!(price, Some(Decimal::from_str("51000.0").unwrap()));
 
         // Clean up
@@ -955,16 +1163,29 @@ mod tests {
         let base_time = Utc::now();
         let ticks = vec![
             create_test_tick(symbol, "50000.0", "bt1", Some(base_time)),
-            create_test_tick(symbol, "51000.0", "bt2", Some(base_time + Duration::seconds(1))),
-            create_test_tick(symbol, "52000.0", "bt3", Some(base_time + Duration::seconds(2))),
+            create_test_tick(
+                symbol,
+                "51000.0",
+                "bt2",
+                Some(base_time + Duration::seconds(1)),
+            ),
+            create_test_tick(
+                symbol,
+                "52000.0",
+                "bt3",
+                Some(base_time + Duration::seconds(2)),
+            ),
         ];
 
         for tick in ticks {
-            repo.insert_tick(&tick).await.expect("Failed to insert tick");
+            repo.insert_tick(&tick)
+                .await
+                .expect("Failed to insert tick");
         }
 
         // Get recent ticks for backtest
-        let backtest_ticks = repo.get_recent_ticks_for_backtest(symbol, 3)
+        let backtest_ticks = repo
+            .get_recent_ticks_for_backtest(symbol, 3)
             .await
             .expect("Failed to get recent ticks for backtest");
 
@@ -992,19 +1213,32 @@ mod tests {
         // Insert ticks with different timestamps
         let base_time = Utc::now();
         let ticks = vec![
-            create_test_tick(symbol, "50000.0", "hist1", Some(base_time - Duration::hours(2))),
-            create_test_tick(symbol, "51000.0", "hist2", Some(base_time - Duration::hours(1))),
+            create_test_tick(
+                symbol,
+                "50000.0",
+                "hist1",
+                Some(base_time - Duration::hours(2)),
+            ),
+            create_test_tick(
+                symbol,
+                "51000.0",
+                "hist2",
+                Some(base_time - Duration::hours(1)),
+            ),
             create_test_tick(symbol, "52000.0", "hist3", Some(base_time)),
         ];
 
         for tick in ticks {
-            repo.insert_tick(&tick).await.expect("Failed to insert tick");
+            repo.insert_tick(&tick)
+                .await
+                .expect("Failed to insert tick");
         }
 
         // Get historical data for backtest
         let start_time = base_time - Duration::hours(3);
         let end_time = base_time + Duration::hours(1);
-        let historical_ticks = repo.get_historical_data_for_backtest(symbol, start_time, end_time, None)
+        let historical_ticks = repo
+            .get_historical_data_for_backtest(symbol, start_time, end_time, None)
             .await
             .expect("Failed to get historical data for backtest");
 
@@ -1013,7 +1247,7 @@ mod tests {
         assert_eq!(historical_ticks[0].trade_id, "hist1");
         assert_eq!(historical_ticks[1].trade_id, "hist2");
         assert_eq!(historical_ticks[2].trade_id, "hist3");
-        
+
         for tick in &historical_ticks {
             assert!(tick.timestamp >= start_time);
             assert!(tick.timestamp <= end_time);
@@ -1034,10 +1268,13 @@ mod tests {
 
         // Insert test data
         let tick = create_test_tick(symbol, "50000.0", "info1", None);
-        repo.insert_tick(&tick).await.expect("Failed to insert tick");
+        repo.insert_tick(&tick)
+            .await
+            .expect("Failed to insert tick");
 
         // Get backtest data info
-        let info = repo.get_backtest_data_info()
+        let info = repo
+            .get_backtest_data_info()
             .await
             .expect("Failed to get backtest data info");
 
@@ -1051,7 +1288,7 @@ mod tests {
         // Test helper methods
         let symbols = info.get_available_symbols();
         assert!(symbols.contains(&symbol.to_string()));
-        
+
         let symbol_info = info.get_symbol_info(symbol);
         assert!(symbol_info.is_some());
         assert!(symbol_info.unwrap().records_count > 0);

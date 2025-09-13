@@ -10,13 +10,15 @@ use tokio::time::sleep;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, info, warn};
 
-use crate::data::types::TickData;
 use super::{
-    traits::Exchange,
-    types::{BinanceStreamMessage, BinanceSubscribeMessage, BinanceTradeMessage, HistoricalTradeParams},
     errors::ExchangeError,
+    traits::Exchange,
+    types::{
+        BinanceStreamMessage, BinanceSubscribeMessage, BinanceTradeMessage, HistoricalTradeParams,
+    },
     utils::{build_binance_trade_streams, convert_binance_to_tick_data},
 };
+use crate::data::types::TickData;
 
 // Constants
 const BINANCE_WS_URL: &str = "wss://stream.binance.com:9443/stream";
@@ -47,22 +49,27 @@ impl BinanceExchange {
         if let Ok(stream_msg) = serde_json::from_str::<BinanceStreamMessage>(text) {
             return convert_binance_to_tick_data(stream_msg.data);
         }
-        
+
         // Fallback: try to parse as direct trade message
         if let Ok(trade_msg) = serde_json::from_str::<BinanceTradeMessage>(text) {
             return convert_binance_to_tick_data(trade_msg);
         }
-        
+
         // Check if it's a subscription confirmation or other control message
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
             if value.get("result").is_some() || value.get("id").is_some() {
                 // This is a subscription confirmation, not an error
                 debug!("Received subscription confirmation: {}", text);
-                return Err(ExchangeError::ParseError("Control message, not trade data".to_string()));
+                return Err(ExchangeError::ParseError(
+                    "Control message, not trade data".to_string(),
+                ));
             }
         }
-        
-        Err(ExchangeError::ParseError(format!("Unable to parse message: {}", text)))
+
+        Err(ExchangeError::ParseError(format!(
+            "Unable to parse message: {}",
+            text
+        )))
     }
 
     /// Handle WebSocket connection with reconnection logic
@@ -73,40 +80,52 @@ impl BinanceExchange {
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<(), ExchangeError> {
         let streams = build_binance_trade_streams(symbols)?;
-        info!("Connecting to Binance WebSocket with {} streams", streams.len());
-        
+        info!(
+            "Connecting to Binance WebSocket with {} streams",
+            streams.len()
+        );
+
         let mut reconnect_attempts = 0;
         const MAX_RECONNECT_ATTEMPTS: u32 = 10;
-        
+
         loop {
             // Check for shutdown signal before each connection attempt
             if shutdown_rx.try_recv().is_ok() {
                 info!("Shutdown signal received, stopping WebSocket connection attempts");
                 return Ok(());
             }
-            
-            match self.connect_and_subscribe(&streams, &callback, shutdown_rx.resubscribe()).await {
+
+            match self
+                .connect_and_subscribe(&streams, &callback, shutdown_rx.resubscribe())
+                .await
+            {
                 Ok(()) => {
                     // Reset reconnect attempts on successful connection
                     reconnect_attempts = 0;
-                    info!("WebSocket connection ended normally - checking if shutdown was requested");
-                    
+                    info!(
+                        "WebSocket connection ended normally - checking if shutdown was requested"
+                    );
+
                     // If connection ended normally, it's likely due to shutdown signal
                     // Exit the reconnection loop
                     return Ok(());
                 }
                 Err(e) => {
                     reconnect_attempts += 1;
-                    error!("WebSocket connection failed (attempt {}): {}", reconnect_attempts, e);
-                    
+                    error!(
+                        "WebSocket connection failed (attempt {}): {}",
+                        reconnect_attempts, e
+                    );
+
                     if reconnect_attempts >= MAX_RECONNECT_ATTEMPTS {
-                        return Err(ExchangeError::NetworkError(
-                            format!("Max reconnection attempts ({}) exceeded", MAX_RECONNECT_ATTEMPTS)
-                        ));
+                        return Err(ExchangeError::NetworkError(format!(
+                            "Max reconnection attempts ({}) exceeded",
+                            MAX_RECONNECT_ATTEMPTS
+                        )));
                     }
-                    
+
                     warn!("Attempting to reconnect in {:?}...", RECONNECT_DELAY);
-                    
+
                     // Wait for reconnect delay or shutdown signal
                     tokio::select! {
                         _ = sleep(RECONNECT_DELAY) => {
@@ -131,23 +150,29 @@ impl BinanceExchange {
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<(), ExchangeError> {
         // Establish WebSocket connection
-        let (ws_stream, _) = connect_async(&self.ws_url).await
+        let (ws_stream, _) = connect_async(&self.ws_url)
+            .await
             .map_err(|e| ExchangeError::WebSocketError(format!("Failed to connect: {}", e)))?;
-        
+
         debug!("WebSocket connected to {}", self.ws_url);
-        
+
         let (mut write, mut read) = ws_stream.split();
-        
+
         // Send subscription message
         let subscribe_msg = BinanceSubscribeMessage::new(streams.to_vec());
-        let subscribe_json = serde_json::to_string(&subscribe_msg)
-            .map_err(|e| ExchangeError::ParseError(format!("Failed to serialize subscription: {}", e)))?;
-        
-        write.send(Message::Text(subscribe_json)).await
-            .map_err(|e| ExchangeError::WebSocketError(format!("Failed to send subscription: {}", e)))?;
-        
+        let subscribe_json = serde_json::to_string(&subscribe_msg).map_err(|e| {
+            ExchangeError::ParseError(format!("Failed to serialize subscription: {}", e))
+        })?;
+
+        write
+            .send(Message::Text(subscribe_json))
+            .await
+            .map_err(|e| {
+                ExchangeError::WebSocketError(format!("Failed to send subscription: {}", e))
+            })?;
+
         info!("Subscription sent for {} streams", streams.len());
-        
+
         // Message processing loop
         loop {
             tokio::select! {
@@ -198,42 +223,47 @@ impl BinanceExchange {
     ) -> Result<Vec<TickData>, ExchangeError> {
         let mut url = format!("{}/api/v3/aggTrades", self.api_url);
         url.push_str(&format!("?symbol={}", params.symbol));
-        
+
         if let Some(start_time) = params.start_time {
             url.push_str(&format!("&startTime={}", start_time.timestamp_millis()));
         }
-        
+
         if let Some(end_time) = params.end_time {
             url.push_str(&format!("&endTime={}", end_time.timestamp_millis()));
         }
-        
+
         if let Some(limit) = params.limit {
             // Binance API has a maximum limit of 1000
             let limit = limit.min(1000);
             url.push_str(&format!("&limit={}", limit));
         }
-        
+
         debug!("Fetching historical trades from: {}", url);
-        
-        let response = self.client
+
+        let response = self
+            .client
             .get(&url)
             .timeout(Duration::from_secs(30))
             .send()
             .await?;
-        
+
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(ExchangeError::ApiError(
-                format!("HTTP {}: {}", status, error_text)
-            ));
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(ExchangeError::ApiError(format!(
+                "HTTP {}: {}",
+                status, error_text
+            )));
         }
-        
+
         let trades_json = response.text().await?;
         let trades: Vec<serde_json::Value> = serde_json::from_str(&trades_json)?;
-        
+
         let mut tick_data_vec = Vec::with_capacity(trades.len());
-        
+
         for trade in trades {
             // Parse aggregated trade data from Binance API
             let trade_msg = BinanceTradeMessage {
@@ -244,14 +274,18 @@ impl BinanceExchange {
                 trade_time: trade["T"].as_u64().unwrap_or(0),
                 is_buyer_maker: trade["m"].as_bool().unwrap_or(false),
             };
-            
+
             match convert_binance_to_tick_data(trade_msg) {
                 Ok(tick_data) => tick_data_vec.push(tick_data),
                 Err(e) => warn!("Failed to convert historical trade: {}", e),
             }
         }
-        
-        info!("Successfully fetched {} historical trades for {}", tick_data_vec.len(), params.symbol);
+
+        info!(
+            "Successfully fetched {} historical trades for {}",
+            tick_data_vec.len(),
+            params.symbol
+        );
         Ok(tick_data_vec)
     }
 }
@@ -265,13 +299,19 @@ impl Exchange for BinanceExchange {
         shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<(), ExchangeError> {
         if symbols.is_empty() {
-            return Err(ExchangeError::InvalidSymbol("No symbols provided".to_string()));
+            return Err(ExchangeError::InvalidSymbol(
+                "No symbols provided".to_string(),
+            ));
         }
-        
-        info!("Starting Binance trade subscription for symbols: {:?}", symbols);
-        
+
+        info!(
+            "Starting Binance trade subscription for symbols: {:?}",
+            symbols
+        );
+
         // This will run indefinitely with reconnection logic
-        self.handle_websocket_connection(symbols, callback,shutdown_rx.resubscribe()).await
+        self.handle_websocket_connection(symbols, callback, shutdown_rx.resubscribe())
+            .await
     }
 
     async fn get_historical_trades(
@@ -279,11 +319,13 @@ impl Exchange for BinanceExchange {
         params: HistoricalTradeParams,
     ) -> Result<Vec<TickData>, ExchangeError> {
         if params.symbol.is_empty() {
-            return Err(ExchangeError::InvalidSymbol("Symbol cannot be empty".to_string()));
+            return Err(ExchangeError::InvalidSymbol(
+                "Symbol cannot be empty".to_string(),
+            ));
         }
-        
+
         info!("Fetching historical trades for symbol: {}", params.symbol);
-        
+
         self.fetch_historical_trades_api(&params).await
     }
 }
@@ -305,7 +347,7 @@ mod tests {
     #[test]
     fn test_parse_trade_message() {
         let exchange = BinanceExchange::new();
-        
+
         // Test combined stream message format
         let stream_msg = r#"{
             "stream": "btcusdt@trade",
@@ -323,9 +365,9 @@ mod tests {
                 "M": true
             }
         }"#;
-        
+
         let tick_data = exchange.parse_trade_message(stream_msg).unwrap();
-        
+
         assert_eq!(tick_data.symbol, "BTCUSDT");
         assert_eq!(tick_data.price, Decimal::from_str("50000.00").unwrap());
         assert_eq!(tick_data.quantity, Decimal::from_str("0.001").unwrap());
@@ -337,7 +379,7 @@ mod tests {
     #[test]
     fn test_parse_direct_trade_message() {
         let exchange = BinanceExchange::new();
-        
+
         // Test direct trade message format
         let trade_msg = r#"{
             "e": "trade",
@@ -352,9 +394,9 @@ mod tests {
             "m": true,
             "M": true
         }"#;
-        
+
         let tick_data = exchange.parse_trade_message(trade_msg).unwrap();
-        
+
         assert_eq!(tick_data.symbol, "ETHUSDT");
         assert_eq!(tick_data.price, Decimal::from_str("3000.50").unwrap());
         assert_eq!(tick_data.side, TradeSide::Sell); // is_buyer_maker = true -> Sell
@@ -364,15 +406,15 @@ mod tests {
     #[test]
     fn test_parse_subscription_confirmation() {
         let exchange = BinanceExchange::new();
-        
+
         let confirmation_msg = r#"{
             "result": null,
             "id": 1
         }"#;
-        
+
         let result = exchange.parse_trade_message(confirmation_msg);
         assert!(result.is_err());
-        
+
         // Should be a parse error indicating it's a control message
         if let Err(ExchangeError::ParseError(msg)) = result {
             assert!(msg.contains("Control message"));
@@ -385,11 +427,8 @@ mod tests {
     async fn test_historical_trade_params() {
         let params = HistoricalTradeParams::new("BTCUSDT".to_string())
             .with_limit(100)
-            .with_time_range(
-                Utc::now() - chrono::Duration::hours(1),
-                Utc::now()
-            );
-        
+            .with_time_range(Utc::now() - chrono::Duration::hours(1), Utc::now());
+
         assert_eq!(params.symbol, "BTCUSDT");
         assert_eq!(params.limit, Some(100));
         assert!(params.start_time.is_some());

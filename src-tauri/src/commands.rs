@@ -313,6 +313,7 @@ pub async fn get_ohlc_preview(
     
     let response: Vec<OHLCPreview> = ohlc_data.into_iter().map(|ohlc| OHLCPreview {
         timestamp: ohlc.timestamp.to_rfc3339(),
+        symbol: ohlc.symbol,
         open: ohlc.open.to_string(),
         high: ohlc.high.to_string(),
         low: ohlc.low.to_string(),

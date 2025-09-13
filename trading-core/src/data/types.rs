@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc, Duration, Timelike, Datelike};
+use chrono::{DateTime, Datelike, Duration, Timelike, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -14,7 +14,6 @@ pub enum TradeSide {
     Buy,
     Sell,
 }
-
 
 /// Standard trading data structure - corresponds one-to-one with the tick_data table fields
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -150,7 +149,6 @@ pub enum DataError {
 
 pub type DataResult<T> = Result<T, DataError>;
 
-
 /// Backtest data information for user selection
 #[derive(Debug, Clone)]
 pub struct BacktestDataInfo {
@@ -177,12 +175,15 @@ impl BacktestDataInfo {
     pub fn get_symbol_info(&self, symbol: &str) -> Option<&SymbolDataInfo> {
         self.symbol_info.iter().find(|info| info.symbol == symbol)
     }
-    
+
     /// Get available symbols
     pub fn get_available_symbols(&self) -> Vec<String> {
-        self.symbol_info.iter().map(|info| info.symbol.clone()).collect()
+        self.symbol_info
+            .iter()
+            .map(|info| info.symbol.clone())
+            .collect()
     }
-    
+
     /// Check if has sufficient data for backtesting
     pub fn has_sufficient_data(&self, symbol: &str, min_records: u64) -> bool {
         self.get_symbol_info(symbol)
@@ -247,37 +248,82 @@ impl Timeframe {
     /// Get the start of the time window for a given timestamp
     pub fn align_timestamp(&self, timestamp: DateTime<Utc>) -> DateTime<Utc> {
         match self {
-            Timeframe::OneMinute => timestamp.with_second(0).unwrap().with_nanosecond(0).unwrap(),
+            Timeframe::OneMinute => timestamp
+                .with_second(0)
+                .unwrap()
+                .with_nanosecond(0)
+                .unwrap(),
             Timeframe::FiveMinutes => {
                 let aligned_minute = (timestamp.minute() / 5) * 5;
-                timestamp.with_minute(aligned_minute).unwrap()
-                    .with_second(0).unwrap().with_nanosecond(0).unwrap()
-            },
+                timestamp
+                    .with_minute(aligned_minute)
+                    .unwrap()
+                    .with_second(0)
+                    .unwrap()
+                    .with_nanosecond(0)
+                    .unwrap()
+            }
             Timeframe::FifteenMinutes => {
                 let aligned_minute = (timestamp.minute() / 15) * 15;
-                timestamp.with_minute(aligned_minute).unwrap()
-                    .with_second(0).unwrap().with_nanosecond(0).unwrap()
-            },
+                timestamp
+                    .with_minute(aligned_minute)
+                    .unwrap()
+                    .with_second(0)
+                    .unwrap()
+                    .with_nanosecond(0)
+                    .unwrap()
+            }
             Timeframe::ThirtyMinutes => {
                 let aligned_minute = (timestamp.minute() / 30) * 30;
-                timestamp.with_minute(aligned_minute).unwrap()
-                    .with_second(0).unwrap().with_nanosecond(0).unwrap()
-            },
-            Timeframe::OneHour => timestamp.with_minute(0).unwrap()
-                .with_second(0).unwrap().with_nanosecond(0).unwrap(),
+                timestamp
+                    .with_minute(aligned_minute)
+                    .unwrap()
+                    .with_second(0)
+                    .unwrap()
+                    .with_nanosecond(0)
+                    .unwrap()
+            }
+            Timeframe::OneHour => timestamp
+                .with_minute(0)
+                .unwrap()
+                .with_second(0)
+                .unwrap()
+                .with_nanosecond(0)
+                .unwrap(),
             Timeframe::FourHours => {
                 let aligned_hour = (timestamp.hour() / 4) * 4;
-                timestamp.with_hour(aligned_hour).unwrap().with_minute(0).unwrap()
-                    .with_second(0).unwrap().with_nanosecond(0).unwrap()
-            },
-            Timeframe::OneDay => timestamp.with_hour(0).unwrap().with_minute(0).unwrap()
-                .with_second(0).unwrap().with_nanosecond(0).unwrap(),
+                timestamp
+                    .with_hour(aligned_hour)
+                    .unwrap()
+                    .with_minute(0)
+                    .unwrap()
+                    .with_second(0)
+                    .unwrap()
+                    .with_nanosecond(0)
+                    .unwrap()
+            }
+            Timeframe::OneDay => timestamp
+                .with_hour(0)
+                .unwrap()
+                .with_minute(0)
+                .unwrap()
+                .with_second(0)
+                .unwrap()
+                .with_nanosecond(0)
+                .unwrap(),
             Timeframe::OneWeek => {
                 let days_from_monday = timestamp.weekday().num_days_from_monday();
                 let week_start = timestamp - Duration::days(days_from_monday as i64);
-                week_start.with_hour(0).unwrap().with_minute(0).unwrap()
-                    .with_second(0).unwrap().with_nanosecond(0).unwrap()
-            },
+                week_start
+                    .with_hour(0)
+                    .unwrap()
+                    .with_minute(0)
+                    .unwrap()
+                    .with_second(0)
+                    .unwrap()
+                    .with_nanosecond(0)
+                    .unwrap()
+            }
         }
     }
 }

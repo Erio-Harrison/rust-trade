@@ -2,9 +2,9 @@
 // exchange/traits.rs - Exchange Interface Definition
 // =================================================================
 
-use async_trait::async_trait;
+use super::{ExchangeError, HistoricalTradeParams};
 use crate::data::types::TickData;
-use super::{HistoricalTradeParams, ExchangeError};
+use async_trait::async_trait;
 
 /// Main exchange interface that all exchange implementations must follow
 #[async_trait]
@@ -16,10 +16,10 @@ pub trait Exchange: Send + Sync {
         callback: Box<dyn Fn(TickData) + Send + Sync>,
         shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<(), ExchangeError>;
-    
+
     /// Fetch historical trade data for a specific symbol and time range
     async fn get_historical_trades(
-        &self, 
-        params: HistoricalTradeParams
+        &self,
+        params: HistoricalTradeParams,
     ) -> Result<Vec<TickData>, ExchangeError>;
 }

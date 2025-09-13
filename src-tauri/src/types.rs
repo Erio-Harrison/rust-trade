@@ -97,6 +97,7 @@ pub struct StrategyCapability {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OHLCPreview {
     pub timestamp: String,
+    pub symbol: String,
     pub open: String,
     pub high: String,
     pub low: String,

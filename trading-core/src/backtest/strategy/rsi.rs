@@ -1,4 +1,4 @@
-use super::base::{Strategy, Signal};
+use super::base::{Signal, Strategy};
 use crate::data::types::{OHLCData, TickData, Timeframe};
 use rust_decimal::Decimal;
 use std::collections::{HashMap, VecDeque};
@@ -25,22 +25,22 @@ impl RsiStrategy {
             last_signal: None,
         }
     }
-    
+
     fn calculate_rsi(&self) -> Option<Decimal> {
         if self.gains.len() < self.period || self.losses.len() < self.period {
             return None;
         }
-        
+
         let avg_gain: Decimal = self.gains.iter().sum::<Decimal>() / Decimal::from(self.period);
         let avg_loss: Decimal = self.losses.iter().sum::<Decimal>() / Decimal::from(self.period);
-        
+
         if avg_loss == Decimal::ZERO {
             return Some(Decimal::from(100));
         }
-        
+
         let rs = avg_gain / avg_loss;
         let rsi = Decimal::from(100) - (Decimal::from(100) / (Decimal::from(1) + rs));
-        
+
         Some(rsi)
     }
 }
@@ -49,7 +49,7 @@ impl Strategy for RsiStrategy {
     fn name(&self) -> &str {
         "RSI Strategy"
     }
-    
+
     fn initialize(&mut self, params: HashMap<String, String>) -> Result<(), String> {
         if let Some(period) = params.get("period") {
             self.period = period.parse().map_err(|_| "Invalid period")?;
@@ -60,27 +60,29 @@ impl Strategy for RsiStrategy {
         if let Some(overbought) = params.get("overbought") {
             self.overbought = overbought.parse().map_err(|_| "Invalid overbought")?;
         }
-        
+
         if self.oversold >= self.overbought {
             return Err("Oversold level must be less than overbought level".to_string());
         }
-        
-        println!("RSI Strategy initialized: period={}, oversold={}, overbought={}", 
-                 self.period, self.oversold, self.overbought);
+
+        println!(
+            "RSI Strategy initialized: period={}, oversold={}, overbought={}",
+            self.period, self.oversold, self.overbought
+        );
         Ok(())
     }
-    
+
     fn reset(&mut self) {
         self.prices.clear();
         self.gains.clear();
         self.losses.clear();
         self.last_signal = None;
     }
-    
+
     fn on_tick(&mut self, tick: &TickData) -> Signal {
         if let Some(last_price) = self.prices.back() {
             let change = tick.price - last_price;
-            
+
             if change > Decimal::ZERO {
                 self.gains.push_back(change);
                 self.losses.push_back(Decimal::ZERO);
@@ -88,23 +90,22 @@ impl Strategy for RsiStrategy {
                 self.gains.push_back(Decimal::ZERO);
                 self.losses.push_back(-change);
             }
-            
+
             // Keep fixed length
             if self.gains.len() > self.period {
                 self.gains.pop_front();
                 self.losses.pop_front();
             }
         }
-        
+
         self.prices.push_back(tick.price);
         if self.prices.len() > self.period + 1 {
             self.prices.pop_front();
         }
-        
+
         if let Some(rsi) = self.calculate_rsi() {
             // Buy signal when RSI is oversold and we don't have a buy position
-            if rsi < self.oversold && 
-               !matches!(self.last_signal, Some(Signal::Buy { .. })) {
+            if rsi < self.oversold && !matches!(self.last_signal, Some(Signal::Buy { .. })) {
                 let signal = Signal::Buy {
                     symbol: tick.symbol.clone(),
                     quantity: Decimal::from(100),
@@ -113,8 +114,8 @@ impl Strategy for RsiStrategy {
                 return signal;
             }
             // Sell signal when RSI is overbought and we have a buy position
-            else if rsi > self.overbought && 
-                    matches!(self.last_signal, Some(Signal::Buy { .. })) {
+            else if rsi > self.overbought && matches!(self.last_signal, Some(Signal::Buy { .. }))
+            {
                 let signal = Signal::Sell {
                     symbol: tick.symbol.clone(),
                     quantity: Decimal::from(100),
@@ -123,14 +124,14 @@ impl Strategy for RsiStrategy {
                 return signal;
             }
         }
-        
+
         Signal::Hold
     }
 
     fn on_ohlc(&mut self, ohlc: &OHLCData) -> Signal {
         if let Some(last_price) = self.prices.back() {
             let change = ohlc.close - last_price;
-            
+
             if change > Decimal::ZERO {
                 self.gains.push_back(change);
                 self.losses.push_back(Decimal::ZERO);
@@ -138,18 +139,18 @@ impl Strategy for RsiStrategy {
                 self.gains.push_back(Decimal::ZERO);
                 self.losses.push_back(-change);
             }
-            
+
             if self.gains.len() > self.period {
                 self.gains.pop_front();
                 self.losses.pop_front();
             }
         }
-        
+
         self.prices.push_back(ohlc.close);
         if self.prices.len() > self.period + 1 {
             self.prices.pop_front();
         }
-        
+
         if let Some(rsi) = self.calculate_rsi() {
             if rsi < self.oversold && !matches!(self.last_signal, Some(Signal::Buy { .. })) {
                 let signal = Signal::Buy {
@@ -158,7 +159,8 @@ impl Strategy for RsiStrategy {
                 };
                 self.last_signal = Some(signal.clone());
                 return signal;
-            } else if rsi > self.overbought && matches!(self.last_signal, Some(Signal::Buy { .. })) {
+            } else if rsi > self.overbought && matches!(self.last_signal, Some(Signal::Buy { .. }))
+            {
                 let signal = Signal::Sell {
                     symbol: ohlc.symbol.clone(),
                     quantity: Decimal::from(100),
@@ -167,13 +169,14 @@ impl Strategy for RsiStrategy {
                 return signal;
             }
         }
-        
+
         Signal::Hold
     }
-    
-    fn supports_ohlc(&self) -> bool { true }
-    fn preferred_timeframe(&self) -> Option<Timeframe> { 
-        Some(Timeframe::OneDay) 
-    }
 
+    fn supports_ohlc(&self) -> bool {
+        true
+    }
+    fn preferred_timeframe(&self) -> Option<Timeframe> {
+        Some(Timeframe::OneDay)
+    }
 }

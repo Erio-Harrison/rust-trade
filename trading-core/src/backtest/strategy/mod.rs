@@ -1,10 +1,10 @@
 pub(crate) mod base;
-mod sma;
 mod rsi;
+mod sma;
 
-pub use base::{Strategy, Signal};
-use sma::SmaStrategy;
+pub use base::{Signal, Strategy};
 use rsi::RsiStrategy;
+use sma::SmaStrategy;
 
 #[derive(Debug, Clone)]
 pub struct StrategyInfo {
@@ -26,7 +26,8 @@ pub fn list_strategies() -> Vec<StrategyInfo> {
         StrategyInfo {
             id: "sma".to_string(),
             name: "Simple Moving Average".to_string(),
-            description: "Trading strategy based on short and long-term moving average crossover".to_string(),
+            description: "Trading strategy based on short and long-term moving average crossover"
+                .to_string(),
         },
         StrategyInfo {
             id: "rsi".to_string(),

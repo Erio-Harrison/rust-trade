@@ -401,9 +401,28 @@ export default function BacktestPage() {
           {/* Summary Metrics */}
           <Card>
             <CardHeader>
-              <CardTitle>Backtest Results - {result.strategy_name}</CardTitle>
+              <CardTitle className="flex items-center justify-between">
+                <span>Backtest Results - {result.strategy_name}</span>
+                <span className={`text-sm px-3 py-1 rounded-full ${
+                  result.data_source.startsWith('OHLC') 
+                    ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
+                    : 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200'
+                }`}>
+                  {result.data_source.startsWith('OHLC') 
+                    ? `${result.data_source} K-line Data` 
+                    : 'Tick Data'
+                  }
+                </span>
+              </CardTitle>
             </CardHeader>
             <CardContent>
+              {result.data_source.startsWith('OHLC') && (
+                <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+                  <p className="text-sm text-blue-800 dark:text-blue-200">
+                    📈 This backtest used {result.data_source} candlestick data for improved performance and reduced noise.
+                  </p>
+                </div>
+              )}
               <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
                 <div>
                   <p className="text-sm text-gray-500">Total Return</p>

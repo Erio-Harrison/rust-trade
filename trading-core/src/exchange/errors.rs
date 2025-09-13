@@ -9,22 +9,22 @@ use thiserror::Error;
 pub enum ExchangeError {
     #[error("Network error: {0}")]
     NetworkError(String),
-    
+
     #[error("WebSocket error: {0}")]
     WebSocketError(String),
-    
+
     #[error("Rate limit exceeded: {0}")]
     RateLimit(String),
-    
+
     #[error("Invalid symbol: {0}")]
     InvalidSymbol(String),
-    
+
     #[error("Data parsing error: {0}")]
     ParseError(String),
-    
+
     #[error("Connection timeout")]
     Timeout,
-    
+
     #[error("Exchange API error: {0}")]
     ApiError(String),
 }

@@ -1,5 +1,5 @@
-use chrono::{DateTime, Utc};
 use crate::data::types::TickData;
+use chrono::{DateTime, Utc};
 
 /// Batch processing configuration
 #[derive(Debug, Clone)]

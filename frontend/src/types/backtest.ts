@@ -48,6 +48,7 @@ export interface BacktestResponse {
   total_commission: string;
   trades: TradeInfo[];
   equity_curve: string[];
+  data_source: string;
 }
 
 export interface TradeInfo {
