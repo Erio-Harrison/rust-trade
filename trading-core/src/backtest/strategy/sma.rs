@@ -1,5 +1,5 @@
 use super::base::{Strategy, Signal};
-use crate::data::types::TickData;
+use crate::data::types::{OHLCData, TickData};
 use rust_decimal::Decimal;
 use std::collections::{HashMap, VecDeque};
 
@@ -90,4 +90,39 @@ impl Strategy for SmaStrategy {
         
         Signal::Hold
     }
+
+    fn on_ohlc(&mut self, ohlc: &OHLCData) -> Signal {
+        self.prices.push_back(ohlc.close);
+        
+        if self.prices.len() > self.long_period * 2 {
+            self.prices.pop_front();
+        }
+        
+        if let (Some(short_sma), Some(long_sma)) = 
+            (self.calculate_sma(self.short_period), self.calculate_sma(self.long_period)) {
+            
+            if short_sma > long_sma && !matches!(self.last_signal, Some(Signal::Buy { .. })) {
+                let signal = Signal::Buy {
+                    symbol: ohlc.symbol.clone(),
+                    quantity: Decimal::from(100),
+                };
+                self.last_signal = Some(signal.clone());
+                return signal;
+            } else if short_sma < long_sma && matches!(self.last_signal, Some(Signal::Buy { .. })) {
+                let signal = Signal::Sell {
+                    symbol: ohlc.symbol.clone(),
+                    quantity: Decimal::from(100),
+                };
+                self.last_signal = Some(signal.clone());
+                return signal;
+            }
+        }
+        
+        Signal::Hold
+    }
+    
+    fn supports_ohlc(&self) -> bool { false }
+    fn preferred_timeframe(&self) -> Option<crate::data::types::Timeframe> { 
+        Some(crate::data::types::Timeframe::OneMinute) 
+    }    
 }

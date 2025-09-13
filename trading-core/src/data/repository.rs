@@ -4,7 +4,7 @@ use rust_decimal::Decimal;
 use sqlx::{PgPool, Row, QueryBuilder, Postgres};
 use tracing::{debug, error, info, warn};
 
-use crate::data::types::LiveStrategyLog;
+use crate::data::types::{LiveStrategyLog, OHLCData, Timeframe};
 
 use super::types::{TickData, TradeSide, TickQuery, DataResult, DataError, BacktestDataInfo, DbStats, SymbolDataInfo };
 use super::cache::{TieredCache, TickDataCache};
@@ -609,6 +609,138 @@ impl TickDataRepository {
         
         Ok(())
     }
+
+    /// Generate OHLC data from tick data for a specific time range
+    pub async fn generate_ohlc_from_ticks(
+        &self,
+        symbol: &str,
+        timeframe: Timeframe,
+        start_time: DateTime<Utc>,
+        end_time: DateTime<Utc>,
+        limit: Option<i64>,
+    ) -> DataResult<Vec<OHLCData>> {
+        debug!("Generating OHLC data: {} {} from {} to {}", 
+               symbol, timeframe.as_str(), start_time, end_time);
+
+        // Align start and end times to timeframe boundaries
+        let aligned_start = timeframe.align_timestamp(start_time);
+        let aligned_end = timeframe.align_timestamp(end_time);
+
+        // Query all ticks in the time range
+        let ticks = self.get_historical_data_for_backtest(
+            symbol, 
+            aligned_start, 
+            aligned_end + timeframe.as_duration(), // Extend to include the last window
+            limit
+        ).await?;
+
+        if ticks.is_empty() {
+            debug!("No ticks found for OHLC generation");
+            return Ok(Vec::new());
+        }
+
+        // Group ticks by time windows
+        let mut windows: HashMap<DateTime<Utc>, Vec<TickData>> = HashMap::new();
+        
+        for tick in ticks {
+            let window_start = timeframe.align_timestamp(tick.timestamp);
+            windows.entry(window_start).or_insert_with(Vec::new).push(tick);
+        }
+
+        // Convert each window to OHLC
+        let mut ohlc_data: Vec<OHLCData> = windows
+            .into_iter()
+            .filter_map(|(window_start, mut window_ticks)| {
+                if window_start >= aligned_start && window_start <= aligned_end {
+                    // Sort ticks by timestamp within each window
+                    window_ticks.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+                    OHLCData::from_ticks(&window_ticks, timeframe, window_start)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Sort OHLC data by timestamp
+        ohlc_data.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+
+        debug!("Generated {} OHLC candles for {} {}", 
+               ohlc_data.len(), symbol, timeframe.as_str());
+        
+        Ok(ohlc_data)
+    }
+
+    /// Generate recent OHLC data for backtesting (count-based)
+    pub async fn generate_recent_ohlc_for_backtest(
+        &self,
+        symbol: &str,
+        timeframe: Timeframe,
+        candle_count: u32,
+    ) -> DataResult<Vec<OHLCData>> {
+        debug!("Generating recent {} OHLC candles for backtest: {} {}", 
+               candle_count, symbol, timeframe.as_str());
+
+        // Estimate how many ticks we need to get the required candles
+        // This is a rough estimate - we might need to adjust
+        let estimated_ticks_needed = (candle_count as i64) * 100; // Assume ~100 ticks per candle
+        
+        let recent_ticks = self.get_recent_ticks_for_backtest(symbol, estimated_ticks_needed).await?;
+        
+        if recent_ticks.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Get the time range from the actual data
+        let start_time = recent_ticks[0].timestamp;
+        let end_time = recent_ticks[recent_ticks.len() - 1].timestamp;
+        
+        // Generate OHLC from the time range
+        let mut ohlc_data = self.generate_ohlc_from_ticks(
+            symbol,
+            timeframe,
+            start_time,
+            end_time,
+            None
+        ).await?;
+
+        // Take only the requested number of recent candles
+        ohlc_data.sort_by(|a, b| b.timestamp.cmp(&a.timestamp)); // Latest first
+        ohlc_data.truncate(candle_count as usize);
+        ohlc_data.reverse(); // Reverse to chronological order for backtesting
+
+        debug!("Generated {} recent OHLC candles for backtest", ohlc_data.len());
+        Ok(ohlc_data)
+    }
+
+    /// Get OHLC data statistics for a symbol
+    pub async fn get_ohlc_data_info(
+        &self,
+        symbol: &str,
+        timeframe: Timeframe,
+    ) -> DataResult<(u64, Option<DateTime<Utc>>, Option<DateTime<Utc>>)> {
+        // Get basic tick data info first
+        let stats = self.get_db_stats(Some(symbol)).await?;
+        
+        if let (Some(earliest), Some(latest)) = (stats.earliest_timestamp, stats.latest_timestamp) {
+            // Align to timeframe boundaries
+            let aligned_earliest = timeframe.align_timestamp(earliest);
+            let aligned_latest = timeframe.align_timestamp(latest);
+            
+            // Calculate approximate number of candles
+            let duration_diff = aligned_latest - aligned_earliest;
+            let timeframe_duration = timeframe.as_duration();
+            
+            let estimated_candles = if timeframe_duration.num_seconds() > 0 {
+                (duration_diff.num_seconds() / timeframe_duration.num_seconds()) as u64
+            } else {
+                0
+            };
+
+            Ok((estimated_candles, Some(aligned_earliest), Some(aligned_latest)))
+        } else {
+            Ok((0, None, None))
+        }
+    }   
 }
 
 #[cfg(test)]

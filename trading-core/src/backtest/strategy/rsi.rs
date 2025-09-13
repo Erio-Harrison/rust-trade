@@ -1,5 +1,5 @@
 use super::base::{Strategy, Signal};
-use crate::data::types::TickData;
+use crate::data::types::{OHLCData, TickData, Timeframe};
 use rust_decimal::Decimal;
 use std::collections::{HashMap, VecDeque};
 
@@ -126,4 +126,54 @@ impl Strategy for RsiStrategy {
         
         Signal::Hold
     }
+
+    fn on_ohlc(&mut self, ohlc: &OHLCData) -> Signal {
+        if let Some(last_price) = self.prices.back() {
+            let change = ohlc.close - last_price;
+            
+            if change > Decimal::ZERO {
+                self.gains.push_back(change);
+                self.losses.push_back(Decimal::ZERO);
+            } else {
+                self.gains.push_back(Decimal::ZERO);
+                self.losses.push_back(-change);
+            }
+            
+            if self.gains.len() > self.period {
+                self.gains.pop_front();
+                self.losses.pop_front();
+            }
+        }
+        
+        self.prices.push_back(ohlc.close);
+        if self.prices.len() > self.period + 1 {
+            self.prices.pop_front();
+        }
+        
+        if let Some(rsi) = self.calculate_rsi() {
+            if rsi < self.oversold && !matches!(self.last_signal, Some(Signal::Buy { .. })) {
+                let signal = Signal::Buy {
+                    symbol: ohlc.symbol.clone(),
+                    quantity: Decimal::from(100),
+                };
+                self.last_signal = Some(signal.clone());
+                return signal;
+            } else if rsi > self.overbought && matches!(self.last_signal, Some(Signal::Buy { .. })) {
+                let signal = Signal::Sell {
+                    symbol: ohlc.symbol.clone(),
+                    quantity: Decimal::from(100),
+                };
+                self.last_signal = Some(signal.clone());
+                return signal;
+            }
+        }
+        
+        Signal::Hold
+    }
+    
+    fn supports_ohlc(&self) -> bool { true }
+    fn preferred_timeframe(&self) -> Option<Timeframe> { 
+        Some(Timeframe::OneDay) 
+    }
+
 }

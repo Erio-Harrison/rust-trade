@@ -1,4 +1,4 @@
-use crate::data::types::TickData;
+use crate::data::types::{OHLCData, TickData};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -19,4 +19,8 @@ pub trait Strategy: Send + Sync {
         // Default implementation does nothing
         // Strategies can override if needed
     }
+
+    fn on_ohlc(&mut self, ohlc: &OHLCData) -> Signal { Signal::Hold }
+    fn supports_ohlc(&self) -> bool { false }
+    fn preferred_timeframe(&self) -> Option<crate::data::types::Timeframe> { None }    
 }

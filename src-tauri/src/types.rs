@@ -55,6 +55,7 @@ pub struct BacktestResponse {
     pub total_commission: String,
     pub trades: Vec<TradeInfo>,
     pub equity_curve: Vec<String>,
+    pub data_source: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -81,4 +82,32 @@ pub struct TickDataResponse {
     pub price: String,
     pub quantity: String,
     pub side: String,
+}
+
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StrategyCapability {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub supports_ohlc: bool,
+    pub preferred_timeframe: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OHLCPreview {
+    pub timestamp: String,
+    pub open: String,
+    pub high: String,
+    pub low: String,
+    pub close: String,
+    pub volume: String,
+    pub trade_count: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OHLCRequest {
+    pub symbol: String,
+    pub timeframe: String,
+    pub count: u32,
 }

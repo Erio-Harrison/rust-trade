@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc, Duration, Timelike, Datelike};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -202,4 +202,162 @@ pub struct LiveStrategyLog {
     pub total_pnl: Decimal,
     pub cache_hit: bool,
     pub processing_time_us: u64,
+}
+
+/// Time frame for OHLC data
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Timeframe {
+    OneMinute,
+    FiveMinutes,
+    FifteenMinutes,
+    ThirtyMinutes,
+    OneHour,
+    FourHours,
+    OneDay,
+    OneWeek,
+}
+
+impl Timeframe {
+    pub fn as_duration(&self) -> Duration {
+        match self {
+            Timeframe::OneMinute => Duration::minutes(1),
+            Timeframe::FiveMinutes => Duration::minutes(5),
+            Timeframe::FifteenMinutes => Duration::minutes(15),
+            Timeframe::ThirtyMinutes => Duration::minutes(30),
+            Timeframe::OneHour => Duration::hours(1),
+            Timeframe::FourHours => Duration::hours(4),
+            Timeframe::OneDay => Duration::days(1),
+            Timeframe::OneWeek => Duration::weeks(1),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Timeframe::OneMinute => "1m",
+            Timeframe::FiveMinutes => "5m",
+            Timeframe::FifteenMinutes => "15m",
+            Timeframe::ThirtyMinutes => "30m",
+            Timeframe::OneHour => "1h",
+            Timeframe::FourHours => "4h",
+            Timeframe::OneDay => "1d",
+            Timeframe::OneWeek => "1w",
+        }
+    }
+
+    /// Get the start of the time window for a given timestamp
+    pub fn align_timestamp(&self, timestamp: DateTime<Utc>) -> DateTime<Utc> {
+        match self {
+            Timeframe::OneMinute => timestamp.with_second(0).unwrap().with_nanosecond(0).unwrap(),
+            Timeframe::FiveMinutes => {
+                let aligned_minute = (timestamp.minute() / 5) * 5;
+                timestamp.with_minute(aligned_minute).unwrap()
+                    .with_second(0).unwrap().with_nanosecond(0).unwrap()
+            },
+            Timeframe::FifteenMinutes => {
+                let aligned_minute = (timestamp.minute() / 15) * 15;
+                timestamp.with_minute(aligned_minute).unwrap()
+                    .with_second(0).unwrap().with_nanosecond(0).unwrap()
+            },
+            Timeframe::ThirtyMinutes => {
+                let aligned_minute = (timestamp.minute() / 30) * 30;
+                timestamp.with_minute(aligned_minute).unwrap()
+                    .with_second(0).unwrap().with_nanosecond(0).unwrap()
+            },
+            Timeframe::OneHour => timestamp.with_minute(0).unwrap()
+                .with_second(0).unwrap().with_nanosecond(0).unwrap(),
+            Timeframe::FourHours => {
+                let aligned_hour = (timestamp.hour() / 4) * 4;
+                timestamp.with_hour(aligned_hour).unwrap().with_minute(0).unwrap()
+                    .with_second(0).unwrap().with_nanosecond(0).unwrap()
+            },
+            Timeframe::OneDay => timestamp.with_hour(0).unwrap().with_minute(0).unwrap()
+                .with_second(0).unwrap().with_nanosecond(0).unwrap(),
+            Timeframe::OneWeek => {
+                let days_from_monday = timestamp.weekday().num_days_from_monday();
+                let week_start = timestamp - Duration::days(days_from_monday as i64);
+                week_start.with_hour(0).unwrap().with_minute(0).unwrap()
+                    .with_second(0).unwrap().with_nanosecond(0).unwrap()
+            },
+        }
+    }
+}
+
+/// OHLC data structure
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OHLCData {
+    pub timestamp: DateTime<Utc>,
+    pub symbol: String,
+    pub timeframe: Timeframe,
+    pub open: Decimal,
+    pub high: Decimal,
+    pub low: Decimal,
+    pub close: Decimal,
+    pub volume: Decimal,
+    pub trade_count: u64,
+}
+
+impl OHLCData {
+    pub fn new(
+        timestamp: DateTime<Utc>,
+        symbol: String,
+        timeframe: Timeframe,
+        open: Decimal,
+        high: Decimal,
+        low: Decimal,
+        close: Decimal,
+        volume: Decimal,
+        trade_count: u64,
+    ) -> Self {
+        Self {
+            timestamp,
+            symbol,
+            timeframe,
+            open,
+            high,
+            low,
+            close,
+            volume,
+            trade_count,
+        }
+    }
+
+    /// Create OHLC from a collection of tick data
+    pub fn from_ticks(
+        ticks: &[TickData],
+        timeframe: Timeframe,
+        window_start: DateTime<Utc>,
+    ) -> Option<Self> {
+        if ticks.is_empty() {
+            return None;
+        }
+
+        let symbol = ticks[0].symbol.clone();
+        let mut open = ticks[0].price;
+        let mut high = ticks[0].price;
+        let mut low = ticks[0].price;
+        let mut close = ticks[ticks.len() - 1].price;
+        let mut volume = Decimal::ZERO;
+
+        for tick in ticks {
+            if tick.price > high {
+                high = tick.price;
+            }
+            if tick.price < low {
+                low = tick.price;
+            }
+            volume += tick.quantity;
+        }
+
+        Some(OHLCData::new(
+            window_start,
+            symbol,
+            timeframe,
+            open,
+            high,
+            low,
+            close,
+            volume,
+            ticks.len() as u64,
+        ))
+    }
 }

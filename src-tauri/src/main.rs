@@ -59,7 +59,9 @@ fn main() {
             get_available_strategies,
             run_backtest,
             get_historical_data,
-            validate_backtest_config
+            validate_backtest_config,
+            get_strategy_capabilities,
+            get_ohlc_preview
         ])
         .setup(|app| {
             tracing::info!("Tauri setup started");
