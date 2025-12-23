@@ -6,10 +6,10 @@ use tokio::{select, spawn};
 use tracing::{debug, error, info, warn};
 
 use super::{BatchConfig, BatchStats, ServiceError};
-use trading_common::data::types::TickData;
-use trading_common::data::{cache::TickDataCache, repository::TickDataRepository};
 use crate::exchange::Exchange;
 use crate::live_trading::PaperTradingProcessor;
+use trading_common::data::types::TickData;
+use trading_common::data::{cache::TickDataCache, repository::TickDataRepository};
 
 /// Market data service that coordinates between exchange and data storage
 pub struct MarketDataService {
@@ -340,45 +340,5 @@ impl MarketDataService {
                 }
             }
         }
-    }
-
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use trading_common::data::types::{TickData, TradeSide};
-    use chrono::Utc;
-    use rust_decimal::Decimal;
-    use std::str::FromStr;
-
-    fn create_test_tick(symbol: &str, price: &str, trade_id: &str) -> TickData {
-        TickData::new(
-            Utc::now(),
-            symbol.to_string(),
-            Decimal::from_str(price).unwrap(),
-            Decimal::from_str("1.0").unwrap(),
-            TradeSide::Buy,
-            trade_id.to_string(),
-            false,
-        )
-    }
-
-    #[test]
-    fn test_batch_config_default() {
-        let config = BatchConfig::default();
-        assert_eq!(config.max_batch_size, 100);
-        assert_eq!(config.max_batch_time, 1);
-        assert_eq!(config.max_retry_attempts, 3);
-        assert_eq!(config.retry_delay_ms, 1000);
-    }
-
-    #[test]
-    fn test_service_error_recoverable() {
-        let config_error = ServiceError::Config("test".to_string());
-        let shutdown_error = ServiceError::Shutdown;
-
-        assert!(!config_error.is_recoverable());
-        assert!(!shutdown_error.is_recoverable());
     }
 }

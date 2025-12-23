@@ -1,10 +1,10 @@
 // exchange/utils.rs
 
 use super::{BinanceTradeMessage, ExchangeError};
-use trading_common::data::types::{TickData, TradeSide};
 use chrono::DateTime;
 use rust_decimal::Decimal;
 use std::str::FromStr;
+use trading_common::data::types::{TickData, TradeSide};
 
 /// Convert Binance trade message to standard TickData format
 pub fn convert_binance_to_tick_data(msg: BinanceTradeMessage) -> Result<TickData, ExchangeError> {

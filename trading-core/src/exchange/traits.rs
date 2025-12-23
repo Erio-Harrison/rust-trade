@@ -1,8 +1,8 @@
 // exchange/traits.rs
 
 use super::ExchangeError;
-use trading_common::data::types::TickData;
 use async_trait::async_trait;
+use trading_common::data::types::TickData;
 
 /// Main exchange interface that all exchange implementations must follow
 #[async_trait]

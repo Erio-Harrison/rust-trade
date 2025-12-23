@@ -237,9 +237,9 @@ impl Default for BinanceExchange {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use trading_common::data::types::TradeSide;
     use rust_decimal::Decimal;
     use std::str::FromStr;
+    use trading_common::data::types::TradeSide;
 
     #[test]
     fn test_parse_trade_message() {

@@ -1,6 +1,6 @@
-use trading_common::data::types::DataError;
 use crate::exchange::ExchangeError;
 use thiserror::Error;
+use trading_common::data::types::DataError;
 
 /// Service layer error types
 #[derive(Error, Debug)]
