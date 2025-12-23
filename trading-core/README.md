@@ -139,40 +139,45 @@ Based on comprehensive benchmarking results:
 
 ## 🏗️ Project Structure
 
+This crate is part of a workspace with `trading-common` (shared library) and `src-tauri` (desktop app).
+
 ```
-src/
-├── main.rs                    # Application entry point with live/backtest modes
-├── config.rs                  # Configuration management (Settings, env vars)
-├── data/                      # Data layer
-│   ├── mod.rs                 # Module exports
-│   ├── types.rs               # Core data types (TickData, TradeSide, BacktestDataInfo, errors)
-│   ├── repository.rs          # Database operations, query logic, and backtest data queries
-│   └── cache.rs               # Multi-level caching implementation
-├── exchange/                  # Exchange integrations
-│   ├── mod.rs                 # Module exports
-│   ├── traits.rs              # Exchange interface definition
-│   ├── types.rs               # Exchange-specific data structures
-│   ├── errors.rs              # Exchange error types
-│   ├── utils.rs               # Conversion and validation utilities
-│   └── binance.rs             # Binance WebSocket and REST API implementation
-├── service/                   # Business logic layer (Live trading)
-│   ├── mod.rs                 # Module exports
-│   ├── types.rs               # Service types (BatchConfig, metrics)
-│   ├── errors.rs              # Service error types
-│   └── market_data.rs         # Main data processing service
-├── backtest/                  # Backtesting system
-│   ├── mod.rs                 # Module exports and public interface
-│   ├── engine.rs              # Core backtesting engine and execution logic
-│   ├── portfolio.rs           # Portfolio management, position tracking, P&L calculation
-│   ├── metrics.rs             # Performance metrics calculation (Sharpe, drawdown, etc.)
-│   └── strategy/              # Trading strategies
-│       ├── mod.rs             # Strategy factory and management
-│       ├── base.rs            # Strategy trait definition and interfaces
-│       ├── sma.rs             # Simple Moving Average strategy
-│       └── rsi.rs             # RSI (Relative Strength Index) strategy
-└── live_trading/              # Live trading system
-   ├── mod.rs                  # Module exports
-   └── paper_trading.rs        # Paper trading implementation
+trading-core/
+├── src/
+│   ├── main.rs                # CLI entry point with live/backtest modes
+│   ├── lib.rs                 # Library entry (re-exports trading-common)
+│   ├── config.rs              # Configuration management (Settings, env vars)
+│   ├── exchange/              # Exchange integrations
+│   │   ├── mod.rs             # Module exports
+│   │   ├── traits.rs          # Exchange interface definition
+│   │   ├── types.rs           # Exchange-specific data structures
+│   │   ├── errors.rs          # Exchange error types
+│   │   ├── utils.rs           # Conversion and validation utilities
+│   │   └── binance.rs         # Binance WebSocket implementation
+│   ├── service/               # Business logic layer (Live trading)
+│   │   ├── mod.rs             # Module exports
+│   │   ├── types.rs           # Service types (BatchConfig, stats)
+│   │   ├── errors.rs          # Service error types
+│   │   └── market_data.rs     # Main data processing service
+│   └── live_trading/          # Live trading system
+│       ├── mod.rs             # Module exports
+│       └── paper_trading.rs   # Paper trading implementation
+├── benches/                   # Performance benchmarks
+└── Cargo.toml
+
+trading-common/                # Shared library (separate crate)
+├── src/
+│   ├── lib.rs                 # Library entry point
+│   ├── data/                  # Data layer
+│   │   ├── types.rs           # Core data types (TickData, OHLC, errors)
+│   │   ├── repository.rs      # Database operations
+│   │   └── cache.rs           # Multi-level caching (L1 + L2)
+│   └── backtest/              # Backtesting system
+│       ├── engine.rs          # Core backtesting engine
+│       ├── portfolio.rs       # Portfolio management, P&L tracking
+│       ├── metrics.rs         # Performance metrics (Sharpe, drawdown)
+│       └── strategy/          # Trading strategies (SMA, RSI)
+└── Cargo.toml
 ```
 
 ## ⚙️ Configuration

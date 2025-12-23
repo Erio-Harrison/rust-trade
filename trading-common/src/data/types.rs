@@ -378,10 +378,10 @@ impl OHLCData {
         }
 
         let symbol = ticks[0].symbol.clone();
-        let mut open = ticks[0].price;
+        let open = ticks[0].price;
         let mut high = ticks[0].price;
         let mut low = ticks[0].price;
-        let mut close = ticks[ticks.len() - 1].price;
+        let close = ticks[ticks.len() - 1].price;
         let mut volume = Decimal::ZERO;
 
         for tick in ticks {

@@ -6,12 +6,15 @@ use tokio::signal;
 use tracing::{error, info, warn};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-mod backtest;
+// CLI-specific modules
 mod config;
-mod data;
 mod exchange;
 mod live_trading;
 mod service;
+
+// Import from trading-common
+use trading_common::backtest;
+use trading_common::data;
 
 use config::Settings;
 use data::{cache::TieredCache, repository::TickDataRepository};
@@ -19,7 +22,7 @@ use exchange::BinanceExchange;
 use live_trading::PaperTradingProcessor;
 use service::MarketDataService;
 
-use crate::data::cache::TickDataCache;
+use data::cache::TickDataCache;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -98,7 +101,7 @@ async fn run_live_with_paper_trading() -> Result<(), Box<dyn std::error::Error>>
     );
 
     // Verify strategy exists
-    if crate::backtest::strategy::get_strategy_info(&settings.paper_trading.strategy).is_none() {
+    if backtest::strategy::get_strategy_info(&settings.paper_trading.strategy).is_none() {
         error!("❌ Unknown strategy: {}", settings.paper_trading.strategy);
         error!("💡 Available strategies: rsi, sma");
         std::process::exit(1);
@@ -128,7 +131,7 @@ async fn run_live_with_paper_trading() -> Result<(), Box<dyn std::error::Error>>
         "🧠 Initializing strategy: {}",
         settings.paper_trading.strategy
     );
-    let strategy = crate::backtest::strategy::create_strategy(&settings.paper_trading.strategy)?;
+    let strategy = backtest::strategy::create_strategy(&settings.paper_trading.strategy)?;
     info!("✅ Strategy initialized: {}", strategy.name());
 
     // Create paper trading processor
@@ -247,7 +250,7 @@ async fn run_backtest_mode() -> Result<(), Box<dyn std::error::Error>> {
 async fn run_backtest_interactive(
     repository: TickDataRepository,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use crate::backtest::{
+    use backtest::{
         engine::{BacktestConfig, BacktestEngine},
         strategy::{create_strategy, list_strategies},
     };

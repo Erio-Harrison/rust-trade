@@ -36,20 +36,16 @@ Rust Trade combines high-performance market data processing with sophisticated b
 ### **Desktop Application Mode**
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Next.js       │───▶│  Tauri Commands │───▶│  Trading Core   │
-│   Frontend      │    │   (src-tauri)   │    │   (Library)     │
+│   Next.js       │───▶│  Tauri Commands │───▶│ Trading Common  │
+│   Frontend      │    │   (src-tauri)   │    │    (Library)    │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
-                                │                       │
-                                │                       ▼
-                                │               ┌─────────────────┐
-                                │               │   Repository    │
-                                │               │   + Database    │
-                                │               └─────────────────┘
-                                ▼
-                        ┌─────────────────┐
-                        │ Backtest Engine │
-                        │  + Strategies   │
-                        └─────────────────┘
+                                                       │
+                               ┌───────────────────────┴───────────────────────┐
+                               ▼                                               ▼
+                       ┌─────────────────┐                             ┌─────────────────┐
+                       │ Backtest Engine │                             │   Repository    │
+                       │  + Strategies   │                             │   + Database    │
+                       └─────────────────┘                             └─────────────────┘
 ```
 
 ## 📁 Project Structure
@@ -59,6 +55,7 @@ rust-trade/
 ├── config/                # Global configuration files
 │   ├── development.toml   # Development environment config
 │   ├── production.toml    # Production environment config
+│   ├── schema.sql         # PostgreSQL table definitions
 │   └── test.toml          # Test environment config
 ├── frontend/              # Next.js frontend application
 │   ├── src/               # Frontend source code
@@ -77,10 +74,10 @@ rust-trade/
 │   │   ├── main.rs        # Application entry point
 │   │   ├── state.rs       # Application state management
 │   │   └── types.rs       # Frontend interface types
-│   ├── Cargo.toml         # Tauri dependencies
+│   ├── Cargo.toml         # Tauri dependencies (uses trading-common)
 │   └── tauri.conf.json    # Tauri configuration
-├── trading-core/          # Core Rust trading system
-│   ├── src/               # Trading engine source code
+├── trading-common/        # Shared library for all crates
+│   ├── src/
 │   │   ├── backtest/      # Backtesting engine and strategies
 │   │   │   ├── engine.rs  # Core backtesting logic
 │   │   │   ├── metrics.rs # Performance calculations
@@ -90,6 +87,10 @@ rust-trade/
 │   │   │   ├── cache.rs   # Multi-level caching system
 │   │   │   ├── repository.rs # Database operations
 │   │   │   └── types.rs   # Core data structures
+│   │   └── lib.rs         # Library entry point
+│   └── Cargo.toml         # Common dependencies
+├── trading-core/          # CLI trading system
+│   ├── src/
 │   │   ├── exchange/      # Exchange integrations
 │   │   │   └── binance.rs # Binance WebSocket client
 │   │   ├── live_trading/  # Paper trading system
@@ -97,11 +98,8 @@ rust-trade/
 │   │   ├── service/       # Business logic layer
 │   │   │   └── market_data.rs # Data processing service
 │   │   ├── config.rs      # Configuration management
-│   │   ├── lib.rs         # Library entry point
+│   │   ├── lib.rs         # Library entry point (re-exports trading-common)
 │   │   └── main.rs        # CLI application entry point
-│   ├── config/            # Configuration files
-│   ├── database/          # Database schema and migrations
-│   │   └── schema.sql     # PostgreSQL table definitions
 │   ├── benches/           # Performance benchmarks
 │   ├── Cargo.toml         # Core dependencies
 │   └── README.md          # Core system documentation

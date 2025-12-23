@@ -219,7 +219,7 @@ impl Portfolio {
                 }
                 TradeSide::Sell => {
                     running_cash += trade.quantity * trade.price - trade.commission;
-                    if let Some((curr_qty, curr_avg)) = running_positions.get_mut(&trade.symbol) {
+                    if let Some((curr_qty, _)) = running_positions.get_mut(&trade.symbol) {
                         *curr_qty -= trade.quantity;
                         if *curr_qty <= Decimal::ZERO {
                             running_positions.remove(&trade.symbol);

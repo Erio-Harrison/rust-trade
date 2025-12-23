@@ -195,6 +195,7 @@ impl TickDataCache for InMemoryTickCache {
 
 /// Redis cache implementation
 pub struct RedisTickCache {
+    #[allow(dead_code)] // Keep client alive to maintain connection
     client: RedisClient,
     connection: Arc<Mutex<Connection>>,
     max_ticks_per_symbol: usize,

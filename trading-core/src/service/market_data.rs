@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc, Mutex};
@@ -6,10 +5,10 @@ use tokio::time::{interval, sleep};
 use tokio::{select, spawn};
 use tracing::{debug, error, info, warn};
 
-use super::{BatchConfig, BatchStats, ProcessingMetrics, ServiceError};
-use crate::data::types::TickData;
-use crate::data::{cache::TickDataCache, repository::TickDataRepository};
-use crate::exchange::{Exchange, ExchangeError};
+use super::{BatchConfig, BatchStats, ServiceError};
+use trading_common::data::types::TickData;
+use trading_common::data::{cache::TickDataCache, repository::TickDataRepository};
+use crate::exchange::Exchange;
 use crate::live_trading::PaperTradingProcessor;
 
 /// Market data service that coordinates between exchange and data storage
@@ -48,12 +47,6 @@ impl MarketDataService {
             stats: Arc::new(Mutex::new(BatchStats::default())),
             paper_trading: None,
         }
-    }
-
-    /// Create service with custom batch configuration
-    pub fn with_batch_config(mut self, config: BatchConfig) -> Self {
-        self.batch_config = config;
-        self
     }
 
     pub fn with_paper_trading(mut self, paper_trading: Arc<Mutex<PaperTradingProcessor>>) -> Self {
@@ -349,81 +342,12 @@ impl MarketDataService {
         }
     }
 
-    /// Sync historical data for a symbol
-    pub async fn sync_historical_data(
-        &self,
-        symbol: &str,
-        start_time: chrono::DateTime<chrono::Utc>,
-        end_time: chrono::DateTime<chrono::Utc>,
-    ) -> Result<usize, ServiceError> {
-        info!(
-            "Starting historical data sync for {}: {} to {}",
-            symbol, start_time, end_time
-        );
-
-        let params = crate::exchange::HistoricalTradeParams::new(symbol.to_string())
-            .with_time_range(start_time, end_time)
-            .with_limit(1000);
-
-        let historical_ticks = self.exchange.get_historical_trades(params).await?;
-
-        if historical_ticks.is_empty() {
-            info!("No historical data found for {}", symbol);
-            return Ok(0);
-        }
-
-        let inserted_count = self.repository.batch_insert(historical_ticks).await?;
-        info!(
-            "Historical sync completed for {}: {} ticks inserted",
-            symbol, inserted_count
-        );
-
-        Ok(inserted_count)
-    }
-
-    /// Get processing metrics
-    pub async fn get_metrics(&self) -> Result<ProcessingMetrics, ServiceError> {
-        let stats = self.stats.lock().await.clone();
-
-        let ticks_per_second = if let Some(last_flush) = stats.last_flush_time {
-            let duration = chrono::Utc::now() - last_flush;
-            let seconds = duration.num_seconds() as f64;
-            if seconds > 0.0 {
-                stats.total_ticks_processed as f64 / seconds
-            } else {
-                0.0
-            }
-        } else {
-            0.0
-        };
-
-        Ok(ProcessingMetrics {
-            ticks_per_second,
-            current_batch_size: 0, // Would need additional tracking for current batch
-            time_since_last_flush: stats.last_flush_time.map(|t| {
-                let duration = chrono::Utc::now() - t;
-                std::time::Duration::from_secs(duration.num_seconds() as u64)
-            }),
-            batch_stats: stats,
-        })
-    }
-
-    /// Stop the service
-    pub fn stop(&self) {
-        info!("Stopping market data service");
-        let _ = self.shutdown_tx.send(());
-    }
-
-    /// Get processing statistics
-    pub async fn get_stats(&self) -> Result<BatchStats, ServiceError> {
-        Ok(self.stats.lock().await.clone())
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::types::{TickData, TradeSide};
+    use trading_common::data::types::{TickData, TradeSide};
     use chrono::Utc;
     use rust_decimal::Decimal;
     use std::str::FromStr;

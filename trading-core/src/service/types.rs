@@ -1,4 +1,3 @@
-use crate::data::types::TickData;
 use chrono::{DateTime, Utc};
 
 /// Batch processing configuration
@@ -40,17 +39,4 @@ pub struct BatchStats {
     pub cache_update_failures: u64,
     /// Last flush time
     pub last_flush_time: Option<DateTime<Utc>>,
-}
-
-/// Data processing metrics
-#[derive(Debug, Clone)]
-pub struct ProcessingMetrics {
-    /// Ticks per second
-    pub ticks_per_second: f64,
-    /// Current batch size
-    pub current_batch_size: usize,
-    /// Time since last batch flush
-    pub time_since_last_flush: Option<std::time::Duration>,
-    /// Overall processing statistics
-    pub batch_stats: BatchStats,
 }

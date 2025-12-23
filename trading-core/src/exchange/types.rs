@@ -1,40 +1,6 @@
-// =================================================================
-// exchange/types.rs - Data Structures
-// =================================================================
+// exchange/types.rs
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-
-/// Parameters for querying historical trade data
-#[derive(Debug, Clone)]
-pub struct HistoricalTradeParams {
-    pub symbol: String,
-    pub start_time: Option<DateTime<Utc>>,
-    pub end_time: Option<DateTime<Utc>>,
-    pub limit: Option<u32>,
-}
-
-impl HistoricalTradeParams {
-    pub fn new(symbol: String) -> Self {
-        Self {
-            symbol: symbol.to_uppercase(),
-            start_time: None,
-            end_time: None,
-            limit: None,
-        }
-    }
-
-    pub fn with_time_range(mut self, start: DateTime<Utc>, end: DateTime<Utc>) -> Self {
-        self.start_time = Some(start);
-        self.end_time = Some(end);
-        self
-    }
-
-    pub fn with_limit(mut self, limit: u32) -> Self {
-        self.limit = Some(limit);
-        self
-    }
-}
 
 /// Binance specific trade message format
 #[derive(Debug, Deserialize, Clone)]
@@ -68,6 +34,7 @@ pub struct BinanceTradeMessage {
 #[derive(Debug, Deserialize)]
 pub struct BinanceStreamMessage {
     /// Stream name (e.g., "btcusdt@trade")
+    #[allow(dead_code)] // Required for JSON deserialization
     pub stream: String,
 
     /// The actual trade data

@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use trading_core::data::{repository::TickDataRepository, cache::TieredCache};
+use trading_common::data::{repository::TickDataRepository, cache::TieredCache};
 use sqlx::PgPool;
 use std::time::Duration;
 

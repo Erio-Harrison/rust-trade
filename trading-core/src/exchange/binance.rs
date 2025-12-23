@@ -1,10 +1,7 @@
-// =================================================================
-// exchange/binance.rs - Binance Exchange Implementation
-// =================================================================
+// exchange/binance.rs
 
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
-use serde_json::json;
 use std::time::Duration;
 use tokio::time::sleep;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -13,24 +10,18 @@ use tracing::{debug, error, info, warn};
 use super::{
     errors::ExchangeError,
     traits::Exchange,
-    types::{
-        BinanceStreamMessage, BinanceSubscribeMessage, BinanceTradeMessage, HistoricalTradeParams,
-    },
+    types::{BinanceStreamMessage, BinanceSubscribeMessage, BinanceTradeMessage},
     utils::{build_binance_trade_streams, convert_binance_to_tick_data},
 };
-use crate::data::types::TickData;
+use trading_common::data::types::TickData;
 
 // Constants
 const BINANCE_WS_URL: &str = "wss://stream.binance.com:9443/stream";
-const BINANCE_API_URL: &str = "https://api.binance.com";
 const RECONNECT_DELAY: Duration = Duration::from_secs(5);
-const PING_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Binance exchange implementation
 pub struct BinanceExchange {
     ws_url: String,
-    api_url: String,
-    client: reqwest::Client,
 }
 
 impl BinanceExchange {
@@ -38,8 +29,6 @@ impl BinanceExchange {
     pub fn new() -> Self {
         Self {
             ws_url: BINANCE_WS_URL.to_string(),
-            api_url: BINANCE_API_URL.to_string(),
-            client: reqwest::Client::new(),
         }
     }
 
@@ -100,8 +89,6 @@ impl BinanceExchange {
                 .await
             {
                 Ok(()) => {
-                    // Reset reconnect attempts on successful connection
-                    reconnect_attempts = 0;
                     info!(
                         "WebSocket connection ended normally - checking if shutdown was requested"
                     );
@@ -179,7 +166,6 @@ impl BinanceExchange {
                 msg = read.next() => {
                     match msg {
                         Some(Ok(Message::Text(text))) => {
-                            // 处理文本消息
                             match self.parse_trade_message(&text) {
                                 Ok(tick_data) => callback(tick_data),
                                 Err(e) => warn!("Parse error: {}", e),
@@ -204,7 +190,7 @@ impl BinanceExchange {
                 }
                 _ = shutdown_rx.recv() => {
                     info!("Shutdown signal received, closing WebSocket gracefully");
-                    // 发送 Close frame 给服务器
+                    // Send Close frame to server
                     if let Err(e) = write.send(Message::Close(None)).await {
                         warn!("Failed to send close frame: {}", e);
                     }
@@ -214,79 +200,6 @@ impl BinanceExchange {
         }
 
         Ok(())
-    }
-
-    /// Fetch historical trades using REST API
-    async fn fetch_historical_trades_api(
-        &self,
-        params: &HistoricalTradeParams,
-    ) -> Result<Vec<TickData>, ExchangeError> {
-        let mut url = format!("{}/api/v3/aggTrades", self.api_url);
-        url.push_str(&format!("?symbol={}", params.symbol));
-
-        if let Some(start_time) = params.start_time {
-            url.push_str(&format!("&startTime={}", start_time.timestamp_millis()));
-        }
-
-        if let Some(end_time) = params.end_time {
-            url.push_str(&format!("&endTime={}", end_time.timestamp_millis()));
-        }
-
-        if let Some(limit) = params.limit {
-            // Binance API has a maximum limit of 1000
-            let limit = limit.min(1000);
-            url.push_str(&format!("&limit={}", limit));
-        }
-
-        debug!("Fetching historical trades from: {}", url);
-
-        let response = self
-            .client
-            .get(&url)
-            .timeout(Duration::from_secs(30))
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(ExchangeError::ApiError(format!(
-                "HTTP {}: {}",
-                status, error_text
-            )));
-        }
-
-        let trades_json = response.text().await?;
-        let trades: Vec<serde_json::Value> = serde_json::from_str(&trades_json)?;
-
-        let mut tick_data_vec = Vec::with_capacity(trades.len());
-
-        for trade in trades {
-            // Parse aggregated trade data from Binance API
-            let trade_msg = BinanceTradeMessage {
-                symbol: params.symbol.clone(),
-                trade_id: trade["a"].as_u64().unwrap_or(0), // Aggregate trade ID
-                price: trade["p"].as_str().unwrap_or("0").to_string(),
-                quantity: trade["q"].as_str().unwrap_or("0").to_string(),
-                trade_time: trade["T"].as_u64().unwrap_or(0),
-                is_buyer_maker: trade["m"].as_bool().unwrap_or(false),
-            };
-
-            match convert_binance_to_tick_data(trade_msg) {
-                Ok(tick_data) => tick_data_vec.push(tick_data),
-                Err(e) => warn!("Failed to convert historical trade: {}", e),
-            }
-        }
-
-        info!(
-            "Successfully fetched {} historical trades for {}",
-            tick_data_vec.len(),
-            params.symbol
-        );
-        Ok(tick_data_vec)
     }
 }
 
@@ -313,21 +226,6 @@ impl Exchange for BinanceExchange {
         self.handle_websocket_connection(symbols, callback, shutdown_rx.resubscribe())
             .await
     }
-
-    async fn get_historical_trades(
-        &self,
-        params: HistoricalTradeParams,
-    ) -> Result<Vec<TickData>, ExchangeError> {
-        if params.symbol.is_empty() {
-            return Err(ExchangeError::InvalidSymbol(
-                "Symbol cannot be empty".to_string(),
-            ));
-        }
-
-        info!("Fetching historical trades for symbol: {}", params.symbol);
-
-        self.fetch_historical_trades_api(&params).await
-    }
 }
 
 impl Default for BinanceExchange {
@@ -339,8 +237,7 @@ impl Default for BinanceExchange {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::types::TradeSide;
-    use chrono::Utc;
+    use trading_common::data::types::TradeSide;
     use rust_decimal::Decimal;
     use std::str::FromStr;
 
@@ -421,17 +318,5 @@ mod tests {
         } else {
             panic!("Expected ParseError with control message indication");
         }
-    }
-
-    #[tokio::test]
-    async fn test_historical_trade_params() {
-        let params = HistoricalTradeParams::new("BTCUSDT".to_string())
-            .with_limit(100)
-            .with_time_range(Utc::now() - chrono::Duration::hours(1), Utc::now());
-
-        assert_eq!(params.symbol, "BTCUSDT");
-        assert_eq!(params.limit, Some(100));
-        assert!(params.start_time.is_some());
-        assert!(params.end_time.is_some());
     }
 }

@@ -20,7 +20,7 @@ pub trait Strategy: Send + Sync {
         // Strategies can override if needed
     }
 
-    fn on_ohlc(&mut self, ohlc: &OHLCData) -> Signal {
+    fn on_ohlc(&mut self, _ohlc: &OHLCData) -> Signal {
         Signal::Hold
     }
     fn supports_ohlc(&self) -> bool {

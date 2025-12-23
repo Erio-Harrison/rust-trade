@@ -10,12 +10,6 @@ pub struct Database {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct Server {
-    pub host: String,
-    pub port: u32,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct MemoryCache {
     pub max_ticks_per_symbol: usize,
     pub ttl_seconds: u64,
@@ -24,7 +18,6 @@ pub struct MemoryCache {
 #[derive(Debug, Deserialize)]
 pub struct RedisCache {
     pub url: String,
-    pub pool_size: u32,
     pub ttl_seconds: u64,
     pub max_ticks_per_symbol: usize,
 }
@@ -45,7 +38,6 @@ pub struct PaperTrading {
 #[derive(Debug, Deserialize)]
 pub struct Settings {
     pub database: Database,
-    pub server: Server,
     pub cache: Cache,
     pub symbols: Vec<String>,
     pub paper_trading: PaperTrading,

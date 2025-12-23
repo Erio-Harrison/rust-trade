@@ -4,10 +4,10 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::debug;
 
-use crate::backtest::strategy::base::{Signal, Strategy};
-use crate::data::cache::TickDataCache;
-use crate::data::repository::TickDataRepository;
-use crate::data::types::{LiveStrategyLog, TickData};
+use trading_common::backtest::strategy::{Signal, Strategy};
+use trading_common::data::cache::TickDataCache;
+use trading_common::data::repository::TickDataRepository;
+use trading_common::data::types::{LiveStrategyLog, TickData};
 
 pub struct PaperTradingProcessor {
     strategy: Box<dyn Strategy + Send>,
@@ -205,23 +205,4 @@ impl PaperTradingProcessor {
             }
         }
     }
-
-    pub fn get_status(&self) -> PaperTradingStatus {
-        PaperTradingStatus {
-            strategy_name: self.strategy.name().to_string(),
-            cash: self.cash,
-            position: self.position,
-            avg_cost: self.avg_cost,
-            total_trades: self.total_trades,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct PaperTradingStatus {
-    pub strategy_name: String,
-    pub cash: Decimal,
-    pub position: Decimal,
-    pub avg_cost: Decimal,
-    pub total_trades: u64,
 }

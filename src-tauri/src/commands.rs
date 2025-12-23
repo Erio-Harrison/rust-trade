@@ -1,15 +1,14 @@
 use crate::state::AppState;
 use crate::types::*;
 use tauri::State;
-use trading_core::{
+use trading_common::{
     backtest::{
-        engine::{BacktestEngine, BacktestConfig},
+        engine::{BacktestEngine, BacktestConfig, BacktestResult},
         strategy::create_strategy,
     },
     data::types::TradeSide,
 };
 use rust_decimal::Decimal;
-use trading_core::backtest::engine::BacktestResult;
 
 use std::str::FromStr;
 use tracing::{info, error};
@@ -52,7 +51,7 @@ pub async fn get_data_info(
 pub async fn get_available_strategies() -> Result<Vec<StrategyInfo>, String> {
     info!("Getting available strategies");
     
-    let strategies = trading_core::backtest::strategy::list_strategies();
+    let strategies = trading_common::backtest::strategy::list_strategies();
     let response: Vec<StrategyInfo> = strategies.into_iter().map(|s| StrategyInfo {
         id: s.id,
         name: s.name,
@@ -231,8 +230,8 @@ fn create_backtest_response(result: BacktestResult, data_source: String) -> Back
             timestamp: trade.timestamp.to_rfc3339(),
             symbol: trade.symbol,
             side: match trade.side {
-                trading_core::data::types::TradeSide::Buy => "Buy".to_string(),
-                trading_core::data::types::TradeSide::Sell => "Sell".to_string(),
+                trading_common::data::types::TradeSide::Buy => "Buy".to_string(),
+                trading_common::data::types::TradeSide::Sell => "Sell".to_string(),
             },
             quantity: trade.quantity.to_string(),
             price: trade.price.to_string(),
@@ -247,12 +246,12 @@ fn create_backtest_response(result: BacktestResult, data_source: String) -> Back
 pub async fn get_strategy_capabilities() -> Result<Vec<StrategyCapability>, String> {
     info!("Getting strategy capabilities");
     
-    let strategies = trading_core::backtest::strategy::list_strategies();
+    let strategies = trading_common::backtest::strategy::list_strategies();
     let mut capabilities = Vec::new();
     
     for strategy_info in strategies {
         // Create temporary strategy instance to check capabilities
-        match trading_core::backtest::strategy::create_strategy(&strategy_info.id) {
+        match trading_common::backtest::strategy::create_strategy(&strategy_info.id) {
             Ok(strategy) => {
                 capabilities.push(StrategyCapability {
                     id: strategy_info.id,
@@ -288,14 +287,14 @@ pub async fn get_ohlc_preview(
           request.symbol, request.timeframe, request.count);
     
     let timeframe = match request.timeframe.as_str() {
-        "1m" => trading_core::data::types::Timeframe::OneMinute,
-        "5m" => trading_core::data::types::Timeframe::FiveMinutes,
-        "15m" => trading_core::data::types::Timeframe::FifteenMinutes,
-        "30m" => trading_core::data::types::Timeframe::ThirtyMinutes,
-        "1h" => trading_core::data::types::Timeframe::OneHour,
-        "4h" => trading_core::data::types::Timeframe::FourHours,
-        "1d" => trading_core::data::types::Timeframe::OneDay,
-        "1w" => trading_core::data::types::Timeframe::OneWeek,
+        "1m" => trading_common::data::types::Timeframe::OneMinute,
+        "5m" => trading_common::data::types::Timeframe::FiveMinutes,
+        "15m" => trading_common::data::types::Timeframe::FifteenMinutes,
+        "30m" => trading_common::data::types::Timeframe::ThirtyMinutes,
+        "1h" => trading_common::data::types::Timeframe::OneHour,
+        "4h" => trading_common::data::types::Timeframe::FourHours,
+        "1d" => trading_common::data::types::Timeframe::OneDay,
+        "1w" => trading_common::data::types::Timeframe::OneWeek,
         _ => return Err(format!("Invalid timeframe: {}", request.timeframe)),
     };
     

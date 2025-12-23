@@ -1,10 +1,8 @@
-// =================================================================
-// exchange/utils.rs - Utility Functions
-// =================================================================
+// exchange/utils.rs
 
 use super::{BinanceTradeMessage, ExchangeError};
-use crate::data::types::{TickData, TradeSide};
-use chrono::{DateTime, Utc};
+use trading_common::data::types::{TickData, TradeSide};
+use chrono::DateTime;
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
