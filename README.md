@@ -112,8 +112,7 @@ rust-trade/
 
 - **Rust 1.70+** - [Install Rust](https://rustup.rs/)
 - **Node.js 18+** - [Install Node.js](https://nodejs.org/)
-- **PostgreSQL 12+** - [Install PostgreSQL](https://www.postgresql.org/download/)
-- **Redis 6+** - [Install Redis](https://redis.io/download/) (optional but recommended)
+- **Docker** - [Install Docker](https://docs.docker.com/get-docker/)
 
 ### 1. Clone the Repository
 
@@ -122,47 +121,29 @@ git clone https://github.com/Erio-Harrison/rust-trade.git
 cd rust-trade
 ```
 
-### 2. Database Setup
+### 2. Start Infrastructure
 
 ```bash
-# Create database
-createdb trading_core
-
-# Set up schema
-Run the SQL commands found in the config folder to create the database tables.
+docker compose up -d
 ```
+
+This starts PostgreSQL (port 5432) and Redis (port 6379). Database tables are created automatically on first launch.
 
 ### 3. Environment Configuration
 
-Create `.env` files in both root directory and `trading-core/`:
+Copy `.env.example` to `.env` in the root directory and in `trading-core/`:
 
 ```bash
-# .env
-DATABASE_URL=postgresql://username:password@localhost/trading_core
-REDIS_URL=redis://127.0.0.1:6379
-RUN_MODE=development
+cp .env.example .env
+cp .env.example trading-core/.env
 ```
 
 ### 4. Install Dependencies
 
 ```bash
-# Install Rust dependencies
-cd trading-core
-cargo build
-cd ..
-
 # Install frontend dependencies
-cd frontend
-npm install
-cd ..
-
-# Install Tauri dependencies
-cd src-tauri
-cargo build
-cd ..
+cd frontend && npm install && cd ..
 ```
-
-PS: 
 
 ## 🎮 Running the Application
 
