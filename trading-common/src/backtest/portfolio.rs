@@ -85,7 +85,7 @@ impl Portfolio {
         match self.positions.get_mut(&symbol) {
             Some(position) => {
                 let total_quantity = position.quantity + quantity;
-                let total_cost = position.quantity * position.avg_price + cost;
+                let total_cost = position.quantity * position.avg_price + cost + commission;
                 position.avg_price = total_cost / total_quantity;
                 position.quantity = total_quantity;
                 position.market_value = total_quantity * price;
@@ -97,7 +97,7 @@ impl Portfolio {
                     Position {
                         symbol: symbol.clone(),
                         quantity,
-                        avg_price: price,
+                        avg_price: price + commission / quantity,
                         market_value: quantity * price,
                         unrealized_pnl: Decimal::ZERO,
                     },
