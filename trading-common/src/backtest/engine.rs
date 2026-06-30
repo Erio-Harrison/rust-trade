@@ -102,6 +102,7 @@ impl BacktestEngine {
                 crate::backtest::strategy::Signal::Hold => {}
             }
 
+            self.portfolio.snapshot_equity();
             processed += 1;
 
             // Progress display
@@ -242,6 +243,7 @@ impl BacktestEngine {
                 crate::backtest::strategy::Signal::Hold => {}
             }
 
+            self.portfolio.snapshot_equity();
             processed += 1;
 
             // Progress display

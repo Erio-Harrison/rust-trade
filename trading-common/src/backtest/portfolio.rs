@@ -31,6 +31,7 @@ pub struct Portfolio {
     pub trades: Vec<Trade>,
     pub current_prices: HashMap<String, Decimal>,
     pub commission_rate: Decimal, // e.g., 0.001 for 0.1%
+    equity_curve: Vec<Decimal>,
 }
 
 impl Portfolio {
@@ -42,6 +43,7 @@ impl Portfolio {
             trades: Vec::new(),
             current_prices: HashMap::new(),
             commission_rate: Decimal::from_str("0.001").unwrap_or(Decimal::ZERO), // 0.1% default
+            equity_curve: vec![initial_capital],
         }
     }
 
@@ -197,47 +199,11 @@ impl Portfolio {
             && self.positions.get(symbol).unwrap().quantity > Decimal::ZERO
     }
 
+    pub fn snapshot_equity(&mut self) {
+        self.equity_curve.push(self.total_value());
+    }
+
     pub fn get_equity_curve(&self) -> Vec<Decimal> {
-        let mut equity_curve = vec![self.initial_capital];
-        let mut running_cash = self.initial_capital;
-        let mut running_positions: HashMap<String, (Decimal, Decimal)> = HashMap::new(); // (quantity, avg_price)
-
-        for trade in &self.trades {
-            match trade.side {
-                TradeSide::Buy => {
-                    running_cash -= trade.quantity * trade.price + trade.commission;
-                    let (curr_qty, curr_avg) = running_positions
-                        .get(&trade.symbol)
-                        .unwrap_or(&(Decimal::ZERO, Decimal::ZERO));
-                    let new_qty = curr_qty + trade.quantity;
-                    let new_avg = if new_qty > Decimal::ZERO {
-                        (curr_qty * curr_avg + trade.quantity * trade.price) / new_qty
-                    } else {
-                        Decimal::ZERO
-                    };
-                    running_positions.insert(trade.symbol.clone(), (new_qty, new_avg));
-                }
-                TradeSide::Sell => {
-                    running_cash += trade.quantity * trade.price - trade.commission;
-                    if let Some((curr_qty, _)) = running_positions.get_mut(&trade.symbol) {
-                        *curr_qty -= trade.quantity;
-                        if *curr_qty <= Decimal::ZERO {
-                            running_positions.remove(&trade.symbol);
-                        }
-                    }
-                }
-            }
-
-            // Calculate current portfolio value
-            let mut portfolio_value = running_cash;
-            for (symbol, (quantity, _)) in &running_positions {
-                if let Some(current_price) = self.current_prices.get(symbol) {
-                    portfolio_value += quantity * current_price;
-                }
-            }
-            equity_curve.push(portfolio_value);
-        }
-
-        equity_curve
+        self.equity_curve.clone()
     }
 }

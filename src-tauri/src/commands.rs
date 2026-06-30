@@ -238,7 +238,7 @@ fn create_backtest_response(result: BacktestResult, data_source: String) -> Back
             realized_pnl: trade.realized_pnl.map(|pnl| pnl.to_string()),
             commission: trade.commission.to_string(),
         }).collect(),
-        equity_curve: result.equity_curve.into_iter().map(|value| value.to_string()).collect(),
+        equity_curve: sample_equity_curve(result.equity_curve, 1000),
     }
 }
 
@@ -323,4 +323,21 @@ pub async fn get_ohlc_preview(
     
     info!("Generated {} OHLC preview records", response.len());
     Ok(response)
+}
+
+fn sample_equity_curve(curve: Vec<rust_decimal::Decimal>, max_points: usize) -> Vec<String> {
+    let len = curve.len();
+    if len <= max_points {
+        return curve.into_iter().map(|v| v.to_string()).collect();
+    }
+    (0..max_points)
+        .map(|i| {
+            let idx = if i == max_points - 1 {
+                len - 1
+            } else {
+                i * (len - 1) / (max_points - 1)
+            };
+            curve[idx].to_string()
+        })
+        .collect()
 }
