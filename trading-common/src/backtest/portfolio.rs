@@ -67,6 +67,7 @@ impl Portfolio {
         symbol: String,
         quantity: Decimal,
         price: Decimal,
+        timestamp: DateTime<Utc>,
     ) -> Result<(), String> {
         let cost = quantity * price;
         let commission = cost * self.commission_rate;
@@ -109,7 +110,7 @@ impl Portfolio {
             side: TradeSide::Buy,
             quantity,
             price,
-            timestamp: Utc::now(),
+            timestamp,
             realized_pnl: None,
             commission,
         });
@@ -122,6 +123,7 @@ impl Portfolio {
         symbol: String,
         quantity: Decimal,
         price: Decimal,
+        timestamp: DateTime<Utc>,
     ) -> Result<(), String> {
         let position = self
             .positions
@@ -157,7 +159,7 @@ impl Portfolio {
             side: TradeSide::Sell,
             quantity,
             price,
-            timestamp: Utc::now(),
+            timestamp,
             realized_pnl: Some(realized_pnl),
             commission,
         });

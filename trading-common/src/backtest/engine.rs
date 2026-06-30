@@ -82,7 +82,7 @@ impl BacktestEngine {
                 crate::backtest::strategy::Signal::Buy { symbol, quantity } => {
                     if let Err(e) = self
                         .portfolio
-                        .execute_buy(symbol.clone(), quantity, tick.price)
+                        .execute_buy(symbol.clone(), quantity, tick.price, tick.timestamp)
                     {
                         println!("Buy failed {}: {}", symbol, e);
                     } else {
@@ -92,7 +92,7 @@ impl BacktestEngine {
                 crate::backtest::strategy::Signal::Sell { symbol, quantity } => {
                     if let Err(e) =
                         self.portfolio
-                            .execute_sell(symbol.clone(), quantity, tick.price)
+                            .execute_sell(symbol.clone(), quantity, tick.price, tick.timestamp)
                     {
                         println!("Sell failed {}: {}", symbol, e);
                     } else {
@@ -223,7 +223,7 @@ impl BacktestEngine {
                 crate::backtest::strategy::Signal::Buy { symbol, quantity } => {
                     if let Err(e) = self
                         .portfolio
-                        .execute_buy(symbol.clone(), quantity, ohlc.close)
+                        .execute_buy(symbol.clone(), quantity, ohlc.close, ohlc.timestamp)
                     {
                         println!("Buy failed {}: {}", symbol, e);
                     } else {
@@ -233,7 +233,7 @@ impl BacktestEngine {
                 crate::backtest::strategy::Signal::Sell { symbol, quantity } => {
                     if let Err(e) =
                         self.portfolio
-                            .execute_sell(symbol.clone(), quantity, ohlc.close)
+                            .execute_sell(symbol.clone(), quantity, ohlc.close, ohlc.timestamp)
                     {
                         println!("Sell failed {}: {}", symbol, e);
                     } else {
