@@ -465,7 +465,9 @@ export default function BacktestPage() {
                 </div>
                 <div>
                   <p className="text-sm text-gray-500">Profit Factor</p>
-                  <p className="text-xl font-bold">{formatPercentage(result.profit_factor)}</p>
+                  <p className="text-xl font-bold">
+                    {result.profit_factor === '∞' ? '∞' : formatPercentage(result.profit_factor)}
+                  </p>
                 </div>
               </div>
             </CardContent>

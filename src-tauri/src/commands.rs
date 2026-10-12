@@ -249,7 +249,10 @@ fn create_backtest_response(result: BacktestResult, data_source: String) -> Back
         sharpe_ratio: result.sharpe_ratio.to_string(),
         volatility: result.volatility.to_string(),
         win_rate: result.win_rate.to_string(),
-        profit_factor: result.profit_factor.to_string(),
+        profit_factor: result
+            .profit_factor
+            .map(|pf| pf.to_string())
+            .unwrap_or_else(|| "∞".to_string()),
         total_commission: result.total_commission.to_string(),
         data_source, // NEW FIELD
         trades: result

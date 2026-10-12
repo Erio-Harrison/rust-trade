@@ -326,7 +326,7 @@ pub struct BacktestResult {
     pub sharpe_ratio: Decimal,
     pub volatility: Decimal,
     pub win_rate: Decimal,
-    pub profit_factor: Decimal,
+    pub profit_factor: Option<Decimal>,
     pub avg_trade_duration_seconds: f64,
     pub total_commission: Decimal,
     pub positions: HashMap<String, crate::backtest::portfolio::Position>,
@@ -361,7 +361,10 @@ impl BacktestResult {
                 self.losing_trades,
                 100.0 - self.win_rate.to_f64().unwrap_or(0.0)
             );
-            println!("Profit Factor: {:.2}", self.profit_factor);
+            match self.profit_factor {
+                Some(pf) => println!("Profit Factor: {:.2}", pf),
+                None => println!("Profit Factor: ∞ (no losing trades)"),
+            }
             println!(
                 "Avg Trade Duration: {:.0} seconds",
                 self.avg_trade_duration_seconds

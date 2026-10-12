@@ -142,8 +142,17 @@ impl BacktestMetrics {
         Decimal::from(profitable_trades) / Decimal::from(trades.len()) * Decimal::from(100)
     }
 
-    /// Calculate profit factor (total profit / total loss)
-    pub fn calculate_profit_factor(trades: &[crate::backtest::portfolio::Trade]) -> Decimal {
+    /// Calculate profit factor (total profit / total loss).
+    ///
+    /// Returns `None` when there are no losing trades to divide by (either no
+    /// realized trades at all, or every realized trade was profitable) — the
+    /// ratio is undefined/unbounded in that case, not a finite number. Callers
+    /// must handle `None` explicitly (e.g. display "∞") rather than falling
+    /// back to a sentinel value like `Decimal::MAX`, which looks like a real
+    /// number to anything downstream that formats or parses it.
+    pub fn calculate_profit_factor(
+        trades: &[crate::backtest::portfolio::Trade],
+    ) -> Option<Decimal> {
         let (total_profit, total_loss) = trades.iter().filter_map(|trade| trade.realized_pnl).fold(
             (Decimal::ZERO, Decimal::ZERO),
             |(profit, loss), pnl| {
@@ -156,14 +165,10 @@ impl BacktestMetrics {
         );
 
         if total_loss == Decimal::ZERO {
-            return if total_profit > Decimal::ZERO {
-                Decimal::MAX
-            } else {
-                Decimal::ZERO
-            };
+            return None;
         }
 
-        total_profit / total_loss
+        Some(total_profit / total_loss)
     }
 
     /// Calculate average trade duration
