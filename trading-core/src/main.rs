@@ -2,7 +2,6 @@ use rust_decimal::Decimal;
 use sqlx::PgPool;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::signal;
 use tracing::{error, info, warn};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -23,6 +22,32 @@ use live_trading::PaperTradingProcessor;
 use service::MarketDataService;
 
 use data::cache::TickDataCache;
+
+/// Waits for either Ctrl+C (SIGINT) or SIGTERM, whichever arrives first.
+///
+/// Container orchestrators (Docker, Kubernetes, systemd) send SIGTERM on
+/// `stop`, not SIGINT. Listening for Ctrl+C alone means the graceful
+/// shutdown flow documented in CLOSE_FLOW.md never runs when this is
+/// deployed in a container — the process just gets killed once the
+/// orchestrator's grace period expires, dropping whatever ticks are still
+/// sitting in the batch buffer.
+#[cfg(unix)]
+async fn wait_for_shutdown_signal() {
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("Failed to install SIGTERM handler");
+
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = sigterm.recv() => {}
+    }
+}
+
+#[cfg(not(unix))]
+async fn wait_for_shutdown_signal() {
+    tokio::signal::ctrl_c()
+        .await
+        .expect("Failed to listen for ctrl-c");
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -172,9 +197,9 @@ async fn run_live_application_with_service(
 
     // Start signal forwarding task
     tokio::spawn(async move {
-        signal::ctrl_c().await.expect("Failed to listen for ctrl-c");
-        println!("\nReceived Ctrl+C signal, forwarding to service...");
-        info!("Received Ctrl+C signal, forwarding to service");
+        wait_for_shutdown_signal().await;
+        println!("\nReceived shutdown signal, forwarding to service...");
+        info!("Received shutdown signal, forwarding to service");
         let _ = service_shutdown_tx.send(());
     });
 
@@ -622,9 +647,9 @@ async fn run_live_application(settings: Settings) -> Result<(), Box<dyn std::err
     // Setup signal forwarding to service
     let service_shutdown_tx = service.get_shutdown_tx();
     tokio::spawn(async move {
-        signal::ctrl_c().await.expect("Failed to listen for ctrl-c");
-        println!("\nReceived Ctrl+C signal, forwarding to service...");
-        info!("Received Ctrl+C signal, forwarding to service");
+        wait_for_shutdown_signal().await;
+        println!("\nReceived shutdown signal, forwarding to service...");
+        info!("Received shutdown signal, forwarding to service");
         let _ = service_shutdown_tx.send(());
     });
 
