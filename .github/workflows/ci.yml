@@ -52,7 +52,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             postgresql-client \
-            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            libwebkit2gtk-4.1-dev librsvg2-dev patchelf \
             build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev
 
       - name: Load database schema
