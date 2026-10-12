@@ -80,20 +80,24 @@ impl BacktestEngine {
             // Execute trades
             match signal {
                 crate::backtest::strategy::Signal::Buy { symbol, quantity } => {
-                    if let Err(e) = self
-                        .portfolio
-                        .execute_buy(symbol.clone(), quantity, tick.price, tick.timestamp)
-                    {
+                    if let Err(e) = self.portfolio.execute_buy(
+                        symbol.clone(),
+                        quantity,
+                        tick.price,
+                        tick.timestamp,
+                    ) {
                         println!("Buy failed {}: {}", symbol, e);
                     } else {
                         println!("BUY {} {} @ ${}", symbol, quantity, tick.price);
                     }
                 }
                 crate::backtest::strategy::Signal::Sell { symbol, quantity } => {
-                    if let Err(e) =
-                        self.portfolio
-                            .execute_sell(symbol.clone(), quantity, tick.price, tick.timestamp)
-                    {
+                    if let Err(e) = self.portfolio.execute_sell(
+                        symbol.clone(),
+                        quantity,
+                        tick.price,
+                        tick.timestamp,
+                    ) {
                         println!("Sell failed {}: {}", symbol, e);
                     } else {
                         println!("SELL {} {} @ ${}", symbol, quantity, tick.price);
@@ -221,20 +225,24 @@ impl BacktestEngine {
             // Execute trades using close price
             match signal {
                 crate::backtest::strategy::Signal::Buy { symbol, quantity } => {
-                    if let Err(e) = self
-                        .portfolio
-                        .execute_buy(symbol.clone(), quantity, ohlc.close, ohlc.timestamp)
-                    {
+                    if let Err(e) = self.portfolio.execute_buy(
+                        symbol.clone(),
+                        quantity,
+                        ohlc.close,
+                        ohlc.timestamp,
+                    ) {
                         println!("Buy failed {}: {}", symbol, e);
                     } else {
                         println!("BUY {} {} @ ${}", symbol, quantity, ohlc.close);
                     }
                 }
                 crate::backtest::strategy::Signal::Sell { symbol, quantity } => {
-                    if let Err(e) =
-                        self.portfolio
-                            .execute_sell(symbol.clone(), quantity, ohlc.close, ohlc.timestamp)
-                    {
+                    if let Err(e) = self.portfolio.execute_sell(
+                        symbol.clone(),
+                        quantity,
+                        ohlc.close,
+                        ohlc.timestamp,
+                    ) {
                         println!("Sell failed {}: {}", symbol, e);
                     } else {
                         println!("SELL {} {} @ ${}", symbol, quantity, ohlc.close);

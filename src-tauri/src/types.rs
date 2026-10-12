@@ -84,7 +84,6 @@ pub struct TickDataResponse {
     pub side: String,
 }
 
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StrategyCapability {
     pub id: String,

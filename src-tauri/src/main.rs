@@ -14,7 +14,7 @@ fn main() {
     if let Err(_) = dotenvy::dotenv() {
         println!("Warning: .env file not found, using environment variables");
     }
-    
+
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .with_file(true)

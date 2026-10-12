@@ -6,12 +6,11 @@ import { invoke } from '@tauri-apps/api/core';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Loader2, Database, TrendingUp, AlertCircle, CheckCircle } from 'lucide-react';
-import { 
-  DataInfoResponse, 
-  StrategyInfo, 
-  BacktestRequest, 
+import {
+  DataInfoResponse,
+  StrategyInfo,
+  BacktestRequest,
   BacktestResponse,
-  HistoricalDataRequest 
 } from '@/types/backtest';
 
 interface BacktestParams {

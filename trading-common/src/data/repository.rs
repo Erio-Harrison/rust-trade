@@ -1154,7 +1154,7 @@ mod tests {
     async fn test_get_recent_ticks_for_backtest() {
         let repo = create_repository().await;
         let pool = repo.get_pool();
-        let symbol = "BTCUSDT_BACKTEST";
+        let symbol = "BTCUSDT_BACKTEST1";
 
         // Clean up before test
         cleanup_database(pool, symbol).await;
@@ -1205,7 +1205,7 @@ mod tests {
     async fn test_get_historical_data_for_backtest() {
         let repo = create_repository().await;
         let pool = repo.get_pool();
-        let symbol = "BTCUSDT_BACKTEST";
+        let symbol = "BTCUSDT_BACKTEST2";
 
         // Clean up before test
         cleanup_database(pool, symbol).await;
@@ -1261,7 +1261,7 @@ mod tests {
     async fn test_get_backtest_data_info() {
         let repo = create_repository().await;
         let pool = repo.get_pool();
-        let symbol = "BTCUSDT_BACKTEST";
+        let symbol = "BTCUSDT_BACKTEST3";
 
         // Clean up before test
         cleanup_database(pool, symbol).await;
