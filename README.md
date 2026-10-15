@@ -61,10 +61,9 @@ Rust Trade combines high-performance market data processing with sophisticated b
 rust-trade/
 ├── assets/                # Project assets and screenshots
 ├── config/                # Global configuration files
-│   ├── development.toml   # Development environment config
-│   ├── production.toml    # Production environment config
+│   ├── development.toml   # Default environment config (RUN_MODE=development)
 │   ├── schema.sql         # PostgreSQL table definitions
-│   └── test.toml          # Test environment config
+│   └── live_strategy_log.sql # Live/paper trading log table definition
 ├── frontend/              # Next.js frontend application
 │   ├── src/               # Frontend source code
 │   │   ├── app/           # App router pages
