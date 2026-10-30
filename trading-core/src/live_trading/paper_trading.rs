@@ -3,12 +3,15 @@ use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
-use tracing::debug;
+use tokio::sync::mpsc;
+use tracing::{debug, warn};
 
 use trading_common::backtest::strategy::{Signal, Strategy};
 use trading_common::data::cache::TickDataCache;
 use trading_common::data::repository::TickDataRepository;
 use trading_common::data::types::{LiveStrategyLog, TickData};
+
+const LOG_CHANNEL_CAPACITY: usize = 1000;
 
 #[derive(Debug, Clone, Copy)]
 struct SymbolPosition {
@@ -38,6 +41,10 @@ pub struct PaperTradingProcessor {
     positions: HashMap<String, SymbolPosition>,
     last_prices: HashMap<String, Decimal>,
     total_trades: u64,
+
+    // `LiveStrategyLog` rows are handed off here instead of being written
+    // to Postgres inline — see `spawn_log_writer`.
+    log_tx: mpsc::Sender<LiveStrategyLog>,
 }
 
 impl PaperTradingProcessor {
@@ -46,6 +53,9 @@ impl PaperTradingProcessor {
         repository: Arc<TickDataRepository>,
         initial_capital: Decimal,
     ) -> Self {
+        let (log_tx, log_rx) = mpsc::channel(LOG_CHANNEL_CAPACITY);
+        spawn_log_writer(repository.clone(), log_rx);
+
         Self {
             strategy,
             repository,
@@ -54,6 +64,7 @@ impl PaperTradingProcessor {
             positions: HashMap::new(),
             last_prices: HashMap::new(),
             total_trades: 0,
+            log_tx,
         }
     }
 
@@ -83,7 +94,10 @@ impl PaperTradingProcessor {
         let portfolio_value = self.calculate_portfolio_value();
         let total_pnl = portfolio_value - self.initial_capital;
 
-        // 5. Record to database
+        // 5. Hand the log row off to the background writer instead of
+        // awaiting a DB round-trip here. This used to be the single
+        // biggest latency cost on this path: the strategy couldn't move on
+        // to the next tick until the INSERT came back.
         let processing_time = start_time.elapsed().as_micros() as u64;
         let log = LiveStrategyLog {
             timestamp: tick.timestamp,
@@ -97,10 +111,16 @@ impl PaperTradingProcessor {
             processing_time_us: processing_time,
         };
 
-        self.repository
-            .insert_live_strategy_log(&log)
-            .await
-            .map_err(|e| format!("Database error: {}", e))?;
+        if let Err(e) = self.log_tx.try_send(log) {
+            match e {
+                mpsc::error::TrySendError::Full(_) => {
+                    warn!("Strategy log writer is falling behind, dropping a log entry");
+                }
+                mpsc::error::TrySendError::Closed(_) => {
+                    // Background writer task has stopped; nothing we can do here.
+                }
+            }
+        }
 
         // 6. Real-time output
         self.log_activity(
@@ -256,4 +276,25 @@ impl PaperTradingProcessor {
             );
         }
     }
+}
+
+/// Writes `LiveStrategyLog` rows off the tick-processing hot path.
+///
+/// Runs until every `Sender` for `log_rx` is dropped (i.e. the owning
+/// `PaperTradingProcessor` is gone), then exits. There's no batch INSERT for
+/// `live_strategy_log` yet, so this still issues one INSERT per row — the
+/// point of this task is only to get those INSERTs off the synchronous
+/// decision path (where they used to block the strategy from moving on to
+/// the next tick), not to batch them.
+fn spawn_log_writer(
+    repository: Arc<TickDataRepository>,
+    mut log_rx: mpsc::Receiver<LiveStrategyLog>,
+) {
+    tokio::spawn(async move {
+        while let Some(log) = log_rx.recv().await {
+            if let Err(e) = repository.insert_live_strategy_log(&log).await {
+                warn!("Failed to write live strategy log: {}", e);
+            }
+        }
+    });
 }
