@@ -366,44 +366,4 @@ impl OHLCData {
             trade_count,
         }
     }
-
-    /// Create OHLC from a collection of tick data
-    pub fn from_ticks(
-        ticks: &[TickData],
-        timeframe: Timeframe,
-        window_start: DateTime<Utc>,
-    ) -> Option<Self> {
-        if ticks.is_empty() {
-            return None;
-        }
-
-        let symbol = ticks[0].symbol.clone();
-        let open = ticks[0].price;
-        let mut high = ticks[0].price;
-        let mut low = ticks[0].price;
-        let close = ticks[ticks.len() - 1].price;
-        let mut volume = Decimal::ZERO;
-
-        for tick in ticks {
-            if tick.price > high {
-                high = tick.price;
-            }
-            if tick.price < low {
-                low = tick.price;
-            }
-            volume += tick.quantity;
-        }
-
-        Some(OHLCData::new(
-            window_start,
-            symbol,
-            timeframe,
-            open,
-            high,
-            low,
-            close,
-            volume,
-            ticks.len() as u64,
-        ))
-    }
 }
