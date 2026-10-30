@@ -649,78 +649,99 @@ impl TickDataRepository {
         Ok(())
     }
 
-    /// Generate OHLC data from tick data for a specific time range
+    /// Generate OHLC candles for a time range, aggregated inside Postgres.
+    ///
+    /// Buckets are aligned exactly like `Timeframe::align_timestamp` (UTC
+    /// floors; weeks start on Monday), so these candles match what the live
+    /// `CandleBuilder` produces from the same ticks. Only the finished candles
+    /// cross the wire — the raw ticks never leave the database.
     pub async fn generate_ohlc_from_ticks(
         &self,
         symbol: &str,
         timeframe: Timeframe,
         start_time: DateTime<Utc>,
         end_time: DateTime<Utc>,
-        limit: Option<i64>,
+    ) -> DataResult<Vec<OHLCData>> {
+        let aligned_start = timeframe.align_timestamp(start_time);
+        // Exclusive upper bound: the end of the window containing `end_time`.
+        let range_end = timeframe.align_timestamp(end_time) + timeframe.as_duration();
+
+        self.query_ohlc_buckets(symbol, timeframe, aligned_start, range_end, None)
+            .await
+    }
+
+    /// Runs the bucketed OHLC aggregation over `[range_start, range_end)`.
+    ///
+    /// With `latest_n`, returns only the most recent `n` buckets (still in
+    /// chronological order); otherwise returns every bucket in the range.
+    async fn query_ohlc_buckets(
+        &self,
+        symbol: &str,
+        timeframe: Timeframe,
+        range_start: DateTime<Utc>,
+        range_end: DateTime<Utc>,
+        latest_n: Option<i64>,
     ) -> DataResult<Vec<OHLCData>> {
         debug!(
-            "Generating OHLC data: {} {} from {} to {}",
+            "Aggregating OHLC in Postgres: {} {} from {} to {} (latest_n={:?})",
             symbol,
             timeframe.as_str(),
-            start_time,
-            end_time
+            range_start,
+            range_end,
+            latest_n
         );
 
-        // Align start and end times to timeframe boundaries
-        let aligned_start = timeframe.align_timestamp(start_time);
-        let aligned_end = timeframe.align_timestamp(end_time);
+        let bucket_secs = timeframe.as_duration().num_seconds();
+        let bucket_offset_secs = match timeframe {
+            Timeframe::OneWeek => MONDAY_EPOCH_OFFSET_SECS,
+            _ => 0,
+        };
 
-        // Query all ticks in the time range
-        let ticks = self
-            .get_historical_data_for_backtest(
-                symbol,
-                aligned_start,
-                aligned_end + timeframe.as_duration(), // Extend to include the last window
-                limit,
-            )
-            .await?;
+        let sql = match latest_n {
+            Some(_) => format!("{OHLC_BUCKET_SQL} ORDER BY bucket DESC LIMIT $6"),
+            None => format!("{OHLC_BUCKET_SQL} ORDER BY bucket ASC"),
+        };
 
-        if ticks.is_empty() {
-            debug!("No ticks found for OHLC generation");
-            return Ok(Vec::new());
+        let mut query = sqlx::query_as::<_, OhlcBucketRow>(&sql)
+            .bind(symbol)
+            .bind(range_start)
+            .bind(bucket_secs)
+            .bind(bucket_offset_secs)
+            .bind(range_end);
+        if let Some(n) = latest_n {
+            query = query.bind(n);
         }
 
-        // Group ticks by time windows
-        let mut windows: HashMap<DateTime<Utc>, Vec<TickData>> = HashMap::new();
-
-        for tick in ticks {
-            let window_start = timeframe.align_timestamp(tick.timestamp);
-            windows
-                .entry(window_start)
-                .or_insert_with(Vec::new)
-                .push(tick);
+        let mut rows = query.fetch_all(&self.pool).await?;
+        if latest_n.is_some() {
+            rows.reverse();
         }
 
-        // Convert each window to OHLC
-        let mut ohlc_data: Vec<OHLCData> = windows
+        let candles = rows
             .into_iter()
-            .filter_map(|(window_start, mut window_ticks)| {
-                if window_start >= aligned_start && window_start <= aligned_end {
-                    // Sort ticks by timestamp within each window
-                    window_ticks.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
-                    OHLCData::from_ticks(&window_ticks, timeframe, window_start)
-                } else {
-                    None
-                }
+            .map(|row| {
+                OHLCData::new(
+                    row.bucket,
+                    symbol.to_string(),
+                    timeframe,
+                    row.open,
+                    row.high,
+                    row.low,
+                    row.close,
+                    row.volume,
+                    row.trade_count.max(0) as u64,
+                )
             })
-            .collect();
-
-        // Sort OHLC data by timestamp
-        ohlc_data.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+            .collect::<Vec<_>>();
 
         debug!(
             "Generated {} OHLC candles for {} {}",
-            ohlc_data.len(),
+            candles.len(),
             symbol,
             timeframe.as_str()
         );
 
-        Ok(ohlc_data)
+        Ok(candles)
     }
 
     // Time-based query operations for OHLC generation
@@ -815,50 +836,27 @@ impl TickDataRepository {
         ticks
     }
 
-    /// Generate recent OHLC data for backtesting with time-based approach
+    /// The most recent `candle_count` OHLC candles (chronological order),
+    /// including the still-forming current one if it has any ticks.
     pub async fn generate_recent_ohlc_for_backtest(
         &self,
         symbol: &str,
         timeframe: Timeframe,
         candle_count: u32,
     ) -> DataResult<Vec<OHLCData>> {
-        // Calculate required time duration
         let duration_hours = calculate_required_duration_hours(timeframe, candle_count);
+        // Exclusive upper bound; the extra second absorbs exchange/local clock skew.
+        let end_time = Utc::now() + Duration::seconds(1);
+        let start_time = end_time - Duration::hours(duration_hours);
 
-        // Set reasonable limits for different timeframes
-        let max_ticks = match timeframe {
-            Timeframe::OneMinute | Timeframe::FiveMinutes => 50000,
-            Timeframe::FifteenMinutes | Timeframe::ThirtyMinutes => 100000,
-            Timeframe::OneHour => 200000,
-            Timeframe::FourHours => 500000,
-            Timeframe::OneDay => 1000000,
-            Timeframe::OneWeek => 2000000,
-        };
-
-        // Get ticks for the calculated time duration
-        let recent_ticks = self
-            .get_ticks_for_timespan_limited(symbol, duration_hours, max_ticks)
-            .await?;
-
-        if recent_ticks.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // Use actual data time range for OHLC generation
-        let start_time = recent_ticks[0].timestamp;
-        let end_time = recent_ticks[recent_ticks.len() - 1].timestamp;
-
-        // Generate OHLC data from tick data
-        let mut ohlc_data = self
-            .generate_ohlc_from_ticks(symbol, timeframe, start_time, end_time, None)
-            .await?;
-
-        // Sort by timestamp descending and take requested count
-        ohlc_data.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-        ohlc_data.truncate(candle_count as usize);
-        ohlc_data.reverse(); // Return in chronological order
-
-        Ok(ohlc_data)
+        self.query_ohlc_buckets(
+            symbol,
+            timeframe,
+            start_time,
+            end_time,
+            Some(i64::from(candle_count)),
+        )
+        .await
     }
 
     /// Get OHLC data statistics for a symbol
@@ -894,6 +892,58 @@ impl TickDataRepository {
             Ok((0, None, None))
         }
     }
+}
+
+/// 1970-01-01 was a Thursday; `Timeframe::OneWeek` windows start on Monday,
+/// so weekly buckets are floored relative to Monday 1970-01-05 00:00 UTC.
+const MONDAY_EPOCH_OFFSET_SECS: i64 = 4 * 86_400;
+
+/// Bucketed OHLC aggregation. Parameters: $1 symbol, $2 range start
+/// (inclusive), $3 bucket length in seconds, $4 bucket offset in seconds,
+/// $5 range end (exclusive). Callers append the ORDER BY / LIMIT clause.
+///
+/// `floor((epoch - offset) / len) * len + offset` reproduces
+/// `Timeframe::align_timestamp` for every timeframe: sub-day lengths all
+/// divide 86400 so UTC-midnight alignment falls out of the epoch arithmetic,
+/// and the offset handles Monday-aligned weeks. `first_value`/`last_value`
+/// over the full window give open/close; ties on the same millisecond are
+/// broken by `trade_id` so the result is deterministic.
+const OHLC_BUCKET_SQL: &str = r#"
+SELECT
+    bucket,
+    MAX(open_price)  AS open,
+    MAX(price)       AS high,
+    MIN(price)       AS low,
+    MAX(close_price) AS close,
+    SUM(quantity)    AS volume,
+    COUNT(*)         AS trade_count
+FROM (
+    SELECT
+        to_timestamp((floor((extract(epoch from timestamp) - $4) / $3) * $3 + $4)::double precision) AS bucket,
+        price,
+        quantity,
+        first_value(price) OVER w AS open_price,
+        last_value(price)  OVER w AS close_price
+    FROM tick_data
+    WHERE symbol = $1 AND timestamp >= $2 AND timestamp < $5
+    WINDOW w AS (
+        PARTITION BY floor((extract(epoch from timestamp) - $4) / $3)
+        ORDER BY timestamp ASC, trade_id ASC
+        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+    )
+) t
+GROUP BY bucket
+"#;
+
+#[derive(sqlx::FromRow)]
+struct OhlcBucketRow {
+    bucket: DateTime<Utc>,
+    open: Decimal,
+    high: Decimal,
+    low: Decimal,
+    close: Decimal,
+    volume: Decimal,
+    trade_count: i64,
 }
 
 /// Calculate required time duration based on timeframe and candle count
@@ -1294,6 +1344,74 @@ mod tests {
         assert!(symbol_info.unwrap().records_count > 0);
 
         // Clean up
+        cleanup_database(pool, symbol).await;
+    }
+
+    #[tokio::test]
+    async fn test_generate_ohlc_aggregates_in_postgres() {
+        let repo = create_repository().await;
+        let pool = repo.get_pool();
+        let symbol = "BTCUSDT_OHLC1";
+
+        cleanup_database(pool, symbol).await;
+
+        // Two one-minute windows, a few minutes in the past so the "recent"
+        // query window covers them too.
+        let window1 = Timeframe::OneMinute.align_timestamp(Utc::now() - Duration::minutes(5));
+        let window2 = window1 + Duration::minutes(1);
+        let ticks = vec![
+            create_test_tick(symbol, "100.0", "o1", Some(window1 + Duration::seconds(10))),
+            create_test_tick(symbol, "110.0", "o2", Some(window1 + Duration::seconds(30))),
+            create_test_tick(symbol, "90.0", "o3", Some(window1 + Duration::seconds(50))),
+            create_test_tick(symbol, "120.0", "o4", Some(window2 + Duration::seconds(5))),
+        ];
+        for tick in &ticks {
+            repo.insert_tick(tick).await.expect("Failed to insert tick");
+        }
+
+        let candles = repo
+            .generate_ohlc_from_ticks(
+                symbol,
+                Timeframe::OneMinute,
+                window1,
+                window2 + Duration::seconds(5),
+            )
+            .await
+            .expect("OHLC aggregation failed");
+
+        assert_eq!(candles.len(), 2, "expected one candle per window");
+
+        let first = &candles[0];
+        assert_eq!(first.timestamp, window1);
+        assert_eq!(first.symbol, symbol);
+        assert_eq!(first.open, Decimal::from(100));
+        assert_eq!(first.high, Decimal::from(110));
+        assert_eq!(first.low, Decimal::from(90));
+        assert_eq!(first.close, Decimal::from(90));
+        assert_eq!(first.volume, Decimal::from(3));
+        assert_eq!(first.trade_count, 3);
+
+        let second = &candles[1];
+        assert_eq!(second.timestamp, window2);
+        assert_eq!(second.open, Decimal::from(120));
+        assert_eq!(second.close, Decimal::from(120));
+        assert_eq!(second.trade_count, 1);
+
+        // "Most recent N" must return the latest window, in chronological order.
+        let recent = repo
+            .generate_recent_ohlc_for_backtest(symbol, Timeframe::OneMinute, 1)
+            .await
+            .expect("recent OHLC failed");
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].timestamp, window2);
+
+        let recent_two = repo
+            .generate_recent_ohlc_for_backtest(symbol, Timeframe::OneMinute, 2)
+            .await
+            .expect("recent OHLC failed");
+        assert_eq!(recent_two.len(), 2);
+        assert!(recent_two[0].timestamp < recent_two[1].timestamp);
+
         cleanup_database(pool, symbol).await;
     }
 }
