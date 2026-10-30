@@ -169,12 +169,17 @@ impl TickDataRepository {
 
         debug!("Querying ticks: symbol={}, limit={}", query.symbol, limit);
 
-        // Try cache first for recent data
-        if self.is_recent_query(query) {
-            let cached_ticks = self
+        let cacheable = self.can_serve_from_cache(query);
+
+        // Try cache first for recent, unfiltered data
+        if cacheable {
+            let mut cached_ticks = self
                 .cache
                 .get_recent_ticks(&query.symbol, limit as usize)
                 .await?;
+            if let Some(start_time) = query.start_time {
+                cached_ticks.retain(|tick| tick.timestamp >= start_time);
+            }
             if cached_ticks.len() == limit as usize {
                 debug!(
                     "Cache hit: retrieved {} ticks from cache",
@@ -187,10 +192,14 @@ impl TickDataRepository {
         // Cache miss or not recent, query database
         let ticks = self.query_ticks_from_db(query).await?;
 
-        // Update cache with fetched data
-        for tick in &ticks {
-            if let Err(e) = self.cache.push_tick(tick).await {
-                warn!("Failed to cache tick {}: {}", tick.trade_id, e);
+        // Backfill the cache only with data that is what the cache claims to
+        // hold (the newest ticks, unfiltered). The DB returns newest-first;
+        // the caches assume chronological pushes, so feed them oldest-first.
+        if cacheable {
+            for tick in ticks.iter().rev() {
+                if let Err(e) = self.cache.push_tick(tick).await {
+                    warn!("Failed to cache tick {}: {}", tick.trade_id, e);
+                }
             }
         }
 
@@ -613,16 +622,17 @@ impl TickDataRepository {
     }
 
     /// Check if query is for recent data (suitable for cache)
-    fn is_recent_query(&self, query: &TickQuery) -> bool {
-        if let Some(start_time) = query.start_time {
-            let now = Utc::now();
-            let duration = now - start_time;
-            // Consider "recent" if within last hour
-            duration <= Duration::hours(1)
-        } else {
-            // If no start time specified, assume it's a recent query
-            true
-        }
+    /// The cache holds only the newest ticks per symbol, unfiltered. It can
+    /// serve a query only if that is exactly what the query asks for: no side
+    /// filter, no end bound, and either no start bound or a recent one (the
+    /// start bound is then applied to the cached ticks before calling it a
+    /// hit).
+    fn can_serve_from_cache(&self, query: &TickQuery) -> bool {
+        query.trade_side.is_none()
+            && query.end_time.is_none()
+            && query
+                .start_time
+                .is_none_or(|start_time| Utc::now() - start_time <= Duration::hours(1))
     }
 
     pub async fn insert_live_strategy_log(&self, log: &LiveStrategyLog) -> DataResult<()> {

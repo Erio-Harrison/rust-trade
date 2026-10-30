@@ -409,8 +409,10 @@ impl TickDataCache for TieredCache {
         if !redis_ticks.is_empty() {
             debug!("L2 cache hit for symbol: {}", symbol);
 
-            // Backfill to memory cache
-            for tick in &redis_ticks {
+            // Backfill to memory cache. Redis hands back newest-first, but the
+            // memory cache assumes pushes arrive in chronological order (it
+            // reads the newest from the back), so push oldest-first.
+            for tick in redis_ticks.iter().rev() {
                 if let Err(e) = self.memory_cache.push_tick(tick).await {
                     warn!("Failed to backfill memory cache: {}", e);
                 }
