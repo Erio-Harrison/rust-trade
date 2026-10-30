@@ -4,12 +4,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use trading_common::backtest::strategy::{Signal, Strategy};
 use trading_common::data::cache::TickDataCache;
+use trading_common::data::candle_builder::CandleBuilder;
 use trading_common::data::repository::TickDataRepository;
-use trading_common::data::types::{LiveStrategyLog, TickData};
+use trading_common::data::types::{LiveStrategyLog, TickData, Timeframe};
 
 const LOG_CHANNEL_CAPACITY: usize = 1000;
 
@@ -42,6 +43,13 @@ pub struct PaperTradingProcessor {
     last_prices: HashMap<String, Decimal>,
     total_trades: u64,
 
+    // When the strategy trades on candles (`supports_ohlc` + a preferred
+    // timeframe), ticks are folded into per-symbol in-memory candles and the
+    // strategy only sees `on_ohlc` for completed ones — the same thing a
+    // backtest feeds it. Otherwise it gets every tick via `on_tick`.
+    ohlc_timeframe: Option<Timeframe>,
+    candle_builders: HashMap<String, CandleBuilder>,
+
     // `LiveStrategyLog` rows are handed off here instead of being written
     // to Postgres inline — see `spawn_log_writer`.
     log_tx: mpsc::Sender<LiveStrategyLog>,
@@ -56,6 +64,23 @@ impl PaperTradingProcessor {
         let (log_tx, log_rx) = mpsc::channel(LOG_CHANNEL_CAPACITY);
         spawn_log_writer(repository.clone(), log_rx);
 
+        let ohlc_timeframe = if strategy.supports_ohlc() {
+            strategy.preferred_timeframe()
+        } else {
+            None
+        };
+        match ohlc_timeframe {
+            Some(timeframe) => info!(
+                "Paper trading: feeding {} {} candles to the strategy",
+                timeframe.as_str(),
+                strategy.name()
+            ),
+            None => info!(
+                "Paper trading: feeding raw ticks to the {} strategy",
+                strategy.name()
+            ),
+        }
+
         Self {
             strategy,
             repository,
@@ -64,6 +89,8 @@ impl PaperTradingProcessor {
             positions: HashMap::new(),
             last_prices: HashMap::new(),
             total_trades: 0,
+            ohlc_timeframe,
+            candle_builders: HashMap::new(),
             log_tx,
         }
     }
@@ -84,8 +111,21 @@ impl PaperTradingProcessor {
 
         self.last_prices.insert(tick.symbol.clone(), tick.price);
 
-        // 2. Policy Handle - Using Existing Policies
-        let signal = self.strategy.on_tick(tick);
+        // 2. Strategy decision: candles for OHLC strategies, raw ticks otherwise.
+        let signal = match self.ohlc_timeframe {
+            Some(timeframe) => {
+                let completed = self
+                    .candle_builders
+                    .entry(tick.symbol.clone())
+                    .or_insert_with(|| CandleBuilder::new(timeframe))
+                    .push(tick);
+                match completed {
+                    Some(candle) => self.strategy.on_ohlc(&candle),
+                    None => Signal::Hold,
+                }
+            }
+            None => self.strategy.on_tick(tick),
+        };
 
         // 3. Execution of trading signals
         let signal_type = self.execute_signal(&signal, tick)?;
