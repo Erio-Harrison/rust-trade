@@ -33,6 +33,14 @@ pub struct PaperTrading {
     pub enabled: bool,
     pub strategy: String,
     pub initial_capital: f64,
+    /// Per-trade commission as a fraction (0.001 = 0.1%). Defaults to the
+    /// same rate the backtest engine uses so the two stay comparable.
+    #[serde(default = "default_commission_rate")]
+    pub commission_rate: f64,
+}
+
+fn default_commission_rate() -> f64 {
+    0.001
 }
 
 #[derive(Debug, Deserialize)]

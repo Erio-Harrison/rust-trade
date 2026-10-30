@@ -1,6 +1,11 @@
-use crate::backtest::{metrics::BacktestMetrics, portfolio::Portfolio, strategy::Strategy};
+use crate::backtest::{
+    metrics::BacktestMetrics,
+    portfolio::Portfolio,
+    strategy::{Signal, Strategy},
+};
 use crate::data::types::TickData;
-use rust_decimal::Decimal;
+use chrono::{DateTime, Utc};
+use rust_decimal::{Decimal, RoundingStrategy};
 use std::collections::HashMap;
 use std::str::FromStr;
 
@@ -8,6 +13,9 @@ use std::str::FromStr;
 pub struct BacktestConfig {
     pub initial_capital: Decimal,
     pub commission_rate: Decimal,
+    /// Fraction of available cash deployed when a strategy emits a Buy
+    /// without an explicit quantity. `1` means all-in.
+    pub position_size: Decimal,
     pub strategy_params: HashMap<String, String>,
 }
 
@@ -16,6 +24,7 @@ impl BacktestConfig {
         Self {
             initial_capital,
             commission_rate: Decimal::from_str("0.001").unwrap_or(Decimal::ZERO), // 0.1% default
+            position_size: Decimal::ONE,
             strategy_params: HashMap::new(),
         }
     }
@@ -25,10 +34,96 @@ impl BacktestConfig {
         self
     }
 
+    pub fn with_position_size(mut self, fraction: Decimal) -> Self {
+        self.position_size = fraction;
+        self
+    }
+
     pub fn with_param(mut self, key: &str, value: &str) -> Self {
         self.strategy_params
             .insert(key.to_string(), value.to_string());
         self
+    }
+}
+
+/// How much of an asset `cash * fraction` buys at `price`, with commission
+/// taken out of the same budget so the resulting order is always affordable.
+/// Rounded down to 8 decimal places (crypto lot precision). `None` when the
+/// inputs can't produce a positive order.
+pub fn affordable_quantity(
+    cash: Decimal,
+    fraction: Decimal,
+    price: Decimal,
+    commission_rate: Decimal,
+) -> Option<Decimal> {
+    if cash <= Decimal::ZERO || fraction <= Decimal::ZERO || price <= Decimal::ZERO {
+        return None;
+    }
+
+    let budget = cash * fraction.min(Decimal::ONE);
+    let unit_cost = price * (Decimal::ONE + commission_rate);
+    let quantity = (budget / unit_cost).round_dp_with_strategy(8, RoundingStrategy::ToZero);
+
+    (quantity > Decimal::ZERO).then_some(quantity)
+}
+
+#[cfg(test)]
+mod sizing_tests {
+    use super::*;
+
+    #[test]
+    fn all_in_order_stays_affordable_after_commission() {
+        let rate = Decimal::from_str("0.001").unwrap();
+        let quantity = affordable_quantity(
+            Decimal::from(10_000),
+            Decimal::ONE,
+            Decimal::from(50_000),
+            rate,
+        )
+        .unwrap();
+
+        let total_cost = quantity * Decimal::from(50_000) * (Decimal::ONE + rate);
+        assert!(quantity > Decimal::ZERO);
+        assert!(total_cost <= Decimal::from(10_000));
+    }
+
+    #[test]
+    fn fraction_scales_the_budget() {
+        let full = affordable_quantity(
+            Decimal::from(1000),
+            Decimal::ONE,
+            Decimal::from(10),
+            Decimal::ZERO,
+        )
+        .unwrap();
+        let half = affordable_quantity(
+            Decimal::from(1000),
+            Decimal::from_str("0.5").unwrap(),
+            Decimal::from(10),
+            Decimal::ZERO,
+        )
+        .unwrap();
+
+        assert_eq!(full, Decimal::from(100));
+        assert_eq!(half, Decimal::from(50));
+    }
+
+    #[test]
+    fn nothing_affordable_is_none() {
+        assert!(affordable_quantity(
+            Decimal::ZERO,
+            Decimal::ONE,
+            Decimal::from(10),
+            Decimal::ZERO
+        )
+        .is_none());
+        assert!(affordable_quantity(
+            Decimal::from(10),
+            Decimal::ONE,
+            Decimal::ZERO,
+            Decimal::ZERO
+        )
+        .is_none());
     }
 }
 
@@ -77,33 +172,7 @@ impl BacktestEngine {
             let signal = self.strategy.on_tick(&tick);
 
             // Execute trades
-            match signal {
-                crate::backtest::strategy::Signal::Buy { symbol, quantity } => {
-                    if let Err(e) = self.portfolio.execute_buy(
-                        symbol.clone(),
-                        quantity,
-                        tick.price,
-                        tick.timestamp,
-                    ) {
-                        println!("Buy failed {}: {}", symbol, e);
-                    } else {
-                        println!("BUY {} {} @ ${}", symbol, quantity, tick.price);
-                    }
-                }
-                crate::backtest::strategy::Signal::Sell { symbol, quantity } => {
-                    if let Err(e) = self.portfolio.execute_sell(
-                        symbol.clone(),
-                        quantity,
-                        tick.price,
-                        tick.timestamp,
-                    ) {
-                        println!("Sell failed {}: {}", symbol, e);
-                    } else {
-                        println!("SELL {} {} @ ${}", symbol, quantity, tick.price);
-                    }
-                }
-                crate::backtest::strategy::Signal::Hold => {}
-            }
+            self.execute_signal(&signal, tick.price, tick.timestamp);
 
             self.portfolio.snapshot_equity();
             processed += 1;
@@ -166,6 +235,67 @@ impl BacktestEngine {
         }
     }
 
+    /// Sizes and executes a signal, and tells the strategy about the fill.
+    ///
+    /// A Buy without a quantity deploys `position_size` of the available cash;
+    /// a Sell without one closes the whole position. Rejected or unsizable
+    /// orders are logged and the strategy is *not* told it filled, so its
+    /// position state stays in step with the portfolio.
+    fn execute_signal(&mut self, signal: &Signal, price: Decimal, timestamp: DateTime<Utc>) {
+        match signal {
+            Signal::Buy { symbol, quantity } => {
+                let quantity = quantity.or_else(|| {
+                    affordable_quantity(
+                        self.portfolio.cash,
+                        self.config.position_size,
+                        price,
+                        self.config.commission_rate,
+                    )
+                });
+                let Some(quantity) = quantity else {
+                    println!("Buy skipped {}: no funds available", symbol);
+                    return;
+                };
+
+                match self
+                    .portfolio
+                    .execute_buy(symbol.clone(), quantity, price, timestamp)
+                {
+                    Ok(()) => {
+                        println!("BUY {} {} @ ${}", symbol, quantity, price);
+                        self.strategy.on_fill(signal);
+                    }
+                    Err(e) => println!("Buy failed {}: {}", symbol, e),
+                }
+            }
+            Signal::Sell { symbol, quantity } => {
+                let quantity = quantity.or_else(|| {
+                    self.portfolio
+                        .positions
+                        .get(symbol)
+                        .map(|position| position.quantity)
+                        .filter(|held| *held > Decimal::ZERO)
+                });
+                let Some(quantity) = quantity else {
+                    println!("Sell skipped {}: no position to sell", symbol);
+                    return;
+                };
+
+                match self
+                    .portfolio
+                    .execute_sell(symbol.clone(), quantity, price, timestamp)
+                {
+                    Ok(()) => {
+                        println!("SELL {} {} @ ${}", symbol, quantity, price);
+                        self.strategy.on_fill(signal);
+                    }
+                    Err(e) => println!("Sell failed {}: {}", symbol, e),
+                }
+            }
+            Signal::Hold => {}
+        }
+    }
+
     fn calculate_returns(equity_curve: &[Decimal]) -> Vec<Decimal> {
         if equity_curve.len() < 2 {
             return Vec::new();
@@ -222,33 +352,7 @@ impl BacktestEngine {
             let signal = self.strategy.on_ohlc(&ohlc);
 
             // Execute trades using close price
-            match signal {
-                crate::backtest::strategy::Signal::Buy { symbol, quantity } => {
-                    if let Err(e) = self.portfolio.execute_buy(
-                        symbol.clone(),
-                        quantity,
-                        ohlc.close,
-                        ohlc.timestamp,
-                    ) {
-                        println!("Buy failed {}: {}", symbol, e);
-                    } else {
-                        println!("BUY {} {} @ ${}", symbol, quantity, ohlc.close);
-                    }
-                }
-                crate::backtest::strategy::Signal::Sell { symbol, quantity } => {
-                    if let Err(e) = self.portfolio.execute_sell(
-                        symbol.clone(),
-                        quantity,
-                        ohlc.close,
-                        ohlc.timestamp,
-                    ) {
-                        println!("Sell failed {}: {}", symbol, e);
-                    } else {
-                        println!("SELL {} {} @ ${}", symbol, quantity, ohlc.close);
-                    }
-                }
-                crate::backtest::strategy::Signal::Hold => {}
-            }
+            self.execute_signal(&signal, ohlc.close, ohlc.timestamp);
 
             self.portfolio.snapshot_equity();
             processed += 1;

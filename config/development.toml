@@ -22,5 +22,6 @@ max_ticks_per_symbol = 10000
 
 [paper_trading]
 enabled = true
-strategy = "rsi"    
-initial_capital = 10000.0   
+strategy = "rsi"
+initial_capital = 10000.0
+commission_rate = 0.001

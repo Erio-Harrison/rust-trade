@@ -7,7 +7,7 @@ pub struct SmaStrategy {
     short_period: usize,
     long_period: usize,
     prices: VecDeque<Decimal>,
-    last_signal: Option<Signal>,
+    in_position: bool,
 }
 
 impl SmaStrategy {
@@ -16,7 +16,7 @@ impl SmaStrategy {
             short_period: 5,
             long_period: 20,
             prices: VecDeque::new(),
-            last_signal: None,
+            in_position: false,
         }
     }
 
@@ -55,7 +55,11 @@ impl Strategy for SmaStrategy {
 
     fn reset(&mut self) {
         self.prices.clear();
-        self.last_signal = None;
+        self.in_position = false;
+    }
+
+    fn on_fill(&mut self, signal: &Signal) {
+        self.in_position = matches!(signal, Signal::Buy { .. });
     }
 
     fn on_tick(&mut self, tick: &TickData) -> Signal {
@@ -71,22 +75,18 @@ impl Strategy for SmaStrategy {
             self.calculate_sma(self.long_period),
         ) {
             // Golden cross: short MA crosses above long MA
-            if short_sma > long_sma && !matches!(self.last_signal, Some(Signal::Buy { .. })) {
-                let signal = Signal::Buy {
+            if short_sma > long_sma && !self.in_position {
+                return Signal::Buy {
                     symbol: tick.symbol.clone(),
-                    quantity: Decimal::from(100),
+                    quantity: None,
                 };
-                self.last_signal = Some(signal.clone());
-                return signal;
             }
             // Death cross: short MA crosses below long MA
-            else if short_sma < long_sma && matches!(self.last_signal, Some(Signal::Buy { .. })) {
-                let signal = Signal::Sell {
+            else if short_sma < long_sma && self.in_position {
+                return Signal::Sell {
                     symbol: tick.symbol.clone(),
-                    quantity: Decimal::from(100),
+                    quantity: None,
                 };
-                self.last_signal = Some(signal.clone());
-                return signal;
             }
         }
 
@@ -104,20 +104,16 @@ impl Strategy for SmaStrategy {
             self.calculate_sma(self.short_period),
             self.calculate_sma(self.long_period),
         ) {
-            if short_sma > long_sma && !matches!(self.last_signal, Some(Signal::Buy { .. })) {
-                let signal = Signal::Buy {
+            if short_sma > long_sma && !self.in_position {
+                return Signal::Buy {
                     symbol: ohlc.symbol.clone(),
-                    quantity: Decimal::from(100),
+                    quantity: None,
                 };
-                self.last_signal = Some(signal.clone());
-                return signal;
-            } else if short_sma < long_sma && matches!(self.last_signal, Some(Signal::Buy { .. })) {
-                let signal = Signal::Sell {
+            } else if short_sma < long_sma && self.in_position {
+                return Signal::Sell {
                     symbol: ohlc.symbol.clone(),
-                    quantity: Decimal::from(100),
+                    quantity: None,
                 };
-                self.last_signal = Some(signal.clone());
-                return signal;
             }
         }
 
@@ -129,5 +125,68 @@ impl Strategy for SmaStrategy {
     }
     fn preferred_timeframe(&self) -> Option<crate::data::types::Timeframe> {
         Some(crate::data::types::Timeframe::OneMinute)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::types::TradeSide;
+    use chrono::{Duration, Utc};
+
+    fn tick(i: i64, price: i64) -> TickData {
+        TickData::new(
+            Utc::now() + Duration::seconds(i),
+            "BTCUSDT".to_string(),
+            Decimal::from(price),
+            Decimal::ONE,
+            TradeSide::Buy,
+            i.to_string(),
+            false,
+        )
+    }
+
+    /// Flat prices to warm up both averages, then a rise so the short MA
+    /// crosses above the long one. Returns the first non-Hold signal.
+    fn feed_until_signal(strategy: &mut SmaStrategy) -> Signal {
+        let mut i = 0;
+        for _ in 0..20 {
+            assert!(matches!(strategy.on_tick(&tick(i, 100)), Signal::Hold));
+            i += 1;
+        }
+        for price in [101, 103, 106, 110, 115] {
+            let signal = strategy.on_tick(&tick(i, price));
+            i += 1;
+            if !matches!(signal, Signal::Hold) {
+                return signal;
+            }
+        }
+        panic!("expected the golden cross to emit a signal");
+    }
+
+    #[test]
+    fn golden_cross_emits_an_unsized_buy() {
+        let mut strategy = SmaStrategy::new();
+        assert!(matches!(
+            feed_until_signal(&mut strategy),
+            Signal::Buy { quantity: None, .. }
+        ));
+    }
+
+    #[test]
+    fn position_state_changes_only_on_fill() {
+        let mut strategy = SmaStrategy::new();
+        let buy = feed_until_signal(&mut strategy);
+
+        // The order was not filled, so the strategy must keep asking to buy.
+        assert!(matches!(
+            strategy.on_tick(&tick(100, 120)),
+            Signal::Buy { .. }
+        ));
+
+        strategy.on_fill(&buy);
+
+        // Now it's in a position: no more buys while the trend holds.
+        assert!(matches!(strategy.on_tick(&tick(101, 125)), Signal::Hold));
     }
 }

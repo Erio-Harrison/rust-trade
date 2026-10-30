@@ -6,6 +6,7 @@ use std::time::Instant;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
+use trading_common::backtest::engine::affordable_quantity;
 use trading_common::backtest::strategy::{Signal, Strategy};
 use trading_common::data::cache::TickDataCache;
 use trading_common::data::candle_builder::CandleBuilder;
@@ -33,6 +34,9 @@ pub struct PaperTradingProcessor {
     strategy: Box<dyn Strategy + Send>,
     repository: Arc<TickDataRepository>,
     initial_capital: Decimal,
+    // Same convention as `BacktestConfig::commission_rate` (0.001 = 0.1%),
+    // so live P&L is comparable to backtest P&L.
+    commission_rate: Decimal,
 
     // Cash is a single shared pool (buying one symbol spends capital that
     // could have gone to another), but positions and last-seen prices are
@@ -60,6 +64,7 @@ impl PaperTradingProcessor {
         strategy: Box<dyn Strategy + Send>,
         repository: Arc<TickDataRepository>,
         initial_capital: Decimal,
+        commission_rate: Decimal,
     ) -> Self {
         let (log_tx, log_rx) = mpsc::channel(LOG_CHANNEL_CAPACITY);
         spawn_log_writer(repository.clone(), log_rx);
@@ -85,6 +90,7 @@ impl PaperTradingProcessor {
             strategy,
             repository,
             initial_capital,
+            commission_rate,
             cash: initial_capital,
             positions: HashMap::new(),
             last_prices: HashMap::new(),
@@ -176,75 +182,103 @@ impl PaperTradingProcessor {
         Ok(())
     }
 
+    /// Sizes and executes a signal with the same rules as the backtest
+    /// engine (all-in buys when unsized, full close on unsized sells,
+    /// commission charged on both sides), and tells the strategy only about
+    /// orders that actually filled.
     fn execute_signal(&mut self, signal: &Signal, tick: &TickData) -> Result<String, String> {
         match signal {
             Signal::Buy { quantity, .. } => {
+                let quantity = quantity.or_else(|| {
+                    affordable_quantity(self.cash, Decimal::ONE, tick.price, self.commission_rate)
+                });
+                let Some(quantity) = quantity else {
+                    debug!("BUY skipped {}: no funds available", tick.symbol);
+                    return Ok("HOLD".to_string());
+                };
+
                 let cost = quantity * tick.price;
-
-                if cost <= self.cash {
-                    let position = self
-                        .positions
-                        .entry(tick.symbol.clone())
-                        .or_insert_with(SymbolPosition::flat);
-
-                    if position.quantity == Decimal::ZERO {
-                        position.quantity = *quantity;
-                        position.avg_cost = tick.price;
-                    } else {
-                        let total_cost = (position.quantity * position.avg_cost) + cost;
-                        position.quantity += quantity;
-                        position.avg_cost = total_cost / position.quantity;
-                    }
-
-                    self.cash -= cost;
-                    self.total_trades += 1;
-
-                    debug!(
-                        "BUY executed: {} {} @ {}, position: {}, cash: {}",
-                        tick.symbol, quantity, tick.price, position.quantity, self.cash
-                    );
-                    return Ok("BUY".to_string());
-                } else {
+                let commission = cost * self.commission_rate;
+                let total_cost = cost + commission;
+                if total_cost > self.cash {
                     debug!(
                         "BUY signal ignored: insufficient cash ({} needed, {} available)",
-                        cost, self.cash
+                        total_cost, self.cash
                     );
+                    return Ok("HOLD".to_string());
                 }
-            }
 
-            Signal::Sell { quantity, .. } => {
                 let position = self
                     .positions
                     .entry(tick.symbol.clone())
                     .or_insert_with(SymbolPosition::flat);
-
-                if *quantity <= position.quantity {
-                    let proceeds = quantity * tick.price;
-                    self.cash += proceeds;
-                    position.quantity -= quantity;
-                    self.total_trades += 1;
-
-                    if position.quantity == Decimal::ZERO {
-                        position.avg_cost = Decimal::ZERO;
-                    }
-
-                    debug!(
-                        "SELL executed: {} {} @ {}, position: {}, cash: {}",
-                        tick.symbol, quantity, tick.price, position.quantity, self.cash
-                    );
-                    return Ok("SELL".to_string());
+                // Average cost includes commission, matching `Portfolio::execute_buy`.
+                if position.quantity == Decimal::ZERO {
+                    position.quantity = quantity;
+                    position.avg_cost = total_cost / quantity;
                 } else {
-                    debug!(
-                        "SELL signal ignored: insufficient position ({} needed, {} available)",
-                        quantity, position.quantity
-                    );
+                    let total = (position.quantity * position.avg_cost) + total_cost;
+                    position.quantity += quantity;
+                    position.avg_cost = total / position.quantity;
                 }
+                let held = position.quantity;
+
+                self.cash -= total_cost;
+                self.total_trades += 1;
+                self.strategy.on_fill(signal);
+
+                debug!(
+                    "BUY executed: {} {} @ {}, position: {}, cash: {}",
+                    tick.symbol, quantity, tick.price, held, self.cash
+                );
+                Ok("BUY".to_string())
             }
 
-            Signal::Hold => return Ok("HOLD".to_string()),
-        }
+            Signal::Sell { quantity, .. } => {
+                let held = self
+                    .positions
+                    .get(&tick.symbol)
+                    .map(|position| position.quantity)
+                    .unwrap_or(Decimal::ZERO);
+                let quantity = quantity.or_else(|| (held > Decimal::ZERO).then_some(held));
+                let Some(quantity) = quantity else {
+                    debug!("SELL skipped {}: no position to sell", tick.symbol);
+                    return Ok("HOLD".to_string());
+                };
+                if quantity > held {
+                    debug!(
+                        "SELL signal ignored: insufficient position ({} needed, {} available)",
+                        quantity, held
+                    );
+                    return Ok("HOLD".to_string());
+                }
 
-        Ok("HOLD".to_string())
+                let proceeds = quantity * tick.price;
+                let commission = proceeds * self.commission_rate;
+
+                let position = self
+                    .positions
+                    .entry(tick.symbol.clone())
+                    .or_insert_with(SymbolPosition::flat);
+                position.quantity -= quantity;
+                if position.quantity == Decimal::ZERO {
+                    position.avg_cost = Decimal::ZERO;
+                }
+                let remaining = position.quantity;
+
+                self.cash += proceeds - commission;
+                self.total_trades += 1;
+                self.strategy.on_fill(signal);
+
+                debug!(
+                    "SELL executed: {} {} @ {}, position: {}, cash: {}",
+                    tick.symbol, quantity, tick.price, remaining, self.cash
+                );
+                Ok("SELL".to_string())
+            }
+
+            Signal::Hold => Ok("HOLD".to_string()),
+        }
     }
 
     /// Cash plus the mark-to-market value of every symbol currently held,

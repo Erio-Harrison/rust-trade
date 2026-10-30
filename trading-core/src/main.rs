@@ -162,10 +162,13 @@ async fn run_live_with_paper_trading() -> Result<(), Box<dyn std::error::Error>>
     // Create paper trading processor
     let initial_capital = Decimal::try_from(settings.paper_trading.initial_capital)
         .map_err(|e| format!("Invalid initial capital: {}", e))?;
+    let commission_rate = Decimal::try_from(settings.paper_trading.commission_rate)
+        .map_err(|e| format!("Invalid commission rate: {}", e))?;
     let paper_trading = Arc::new(tokio::sync::Mutex::new(PaperTradingProcessor::new(
         strategy,
         Arc::clone(&repository),
         initial_capital,
+        commission_rate,
     )));
 
     // Create market data service

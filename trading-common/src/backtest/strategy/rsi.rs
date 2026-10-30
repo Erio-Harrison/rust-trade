@@ -10,7 +10,7 @@ pub struct RsiStrategy {
     prices: VecDeque<Decimal>,
     gains: VecDeque<Decimal>,
     losses: VecDeque<Decimal>,
-    last_signal: Option<Signal>,
+    in_position: bool,
 }
 
 impl RsiStrategy {
@@ -22,7 +22,7 @@ impl RsiStrategy {
             prices: VecDeque::new(),
             gains: VecDeque::new(),
             losses: VecDeque::new(),
-            last_signal: None,
+            in_position: false,
         }
     }
 
@@ -76,7 +76,11 @@ impl Strategy for RsiStrategy {
         self.prices.clear();
         self.gains.clear();
         self.losses.clear();
-        self.last_signal = None;
+        self.in_position = false;
+    }
+
+    fn on_fill(&mut self, signal: &Signal) {
+        self.in_position = matches!(signal, Signal::Buy { .. });
     }
 
     fn on_tick(&mut self, tick: &TickData) -> Signal {
@@ -105,23 +109,18 @@ impl Strategy for RsiStrategy {
 
         if let Some(rsi) = self.calculate_rsi() {
             // Buy signal when RSI is oversold and we don't have a buy position
-            if rsi < self.oversold && !matches!(self.last_signal, Some(Signal::Buy { .. })) {
-                let signal = Signal::Buy {
+            if rsi < self.oversold && !self.in_position {
+                return Signal::Buy {
                     symbol: tick.symbol.clone(),
-                    quantity: Decimal::from(100),
+                    quantity: None,
                 };
-                self.last_signal = Some(signal.clone());
-                return signal;
             }
             // Sell signal when RSI is overbought and we have a buy position
-            else if rsi > self.overbought && matches!(self.last_signal, Some(Signal::Buy { .. }))
-            {
-                let signal = Signal::Sell {
+            else if rsi > self.overbought && self.in_position {
+                return Signal::Sell {
                     symbol: tick.symbol.clone(),
-                    quantity: Decimal::from(100),
+                    quantity: None,
                 };
-                self.last_signal = Some(signal.clone());
-                return signal;
             }
         }
 
@@ -152,21 +151,16 @@ impl Strategy for RsiStrategy {
         }
 
         if let Some(rsi) = self.calculate_rsi() {
-            if rsi < self.oversold && !matches!(self.last_signal, Some(Signal::Buy { .. })) {
-                let signal = Signal::Buy {
+            if rsi < self.oversold && !self.in_position {
+                return Signal::Buy {
                     symbol: ohlc.symbol.clone(),
-                    quantity: Decimal::from(100),
+                    quantity: None,
                 };
-                self.last_signal = Some(signal.clone());
-                return signal;
-            } else if rsi > self.overbought && matches!(self.last_signal, Some(Signal::Buy { .. }))
-            {
-                let signal = Signal::Sell {
+            } else if rsi > self.overbought && self.in_position {
+                return Signal::Sell {
                     symbol: ohlc.symbol.clone(),
-                    quantity: Decimal::from(100),
+                    quantity: None,
                 };
-                self.last_signal = Some(signal.clone());
-                return signal;
             }
         }
 
