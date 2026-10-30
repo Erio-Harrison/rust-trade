@@ -107,18 +107,25 @@ impl MarketDataService {
                     break;
                 }
 
-                // Create callback for tick data
+                // Create callback for tick data.
+                //
+                // This callback is invoked synchronously, in receive order, from the
+                // WebSocket read loop in `Exchange::subscribe_trades` — so a plain
+                // `try_send` here preserves that order exactly. The previous version
+                // spawned a new task per tick to bridge this sync callback to
+                // `.send().await`, but tokio gives no ordering guarantee between
+                // independently spawned tasks, so ticks could land in the processing
+                // channel out of order (more likely under bursty load, i.e. exactly
+                // when correct ordering matters most for strategy signals).
                 let tick_tx_clone = tick_tx.clone();
-                let callback = Box::new(move |tick: TickData| {
-                    let tx = tick_tx_clone.clone();
-                    spawn(async move {
-                        if let Err(e) = tx.send(tick).await {
-                            // Only log error if it's not a channel closed error during shutdown
-                            if !e.to_string().contains("channel closed") {
-                                error!("Failed to send tick data to processing pipeline: {}", e);
-                            }
-                        }
-                    });
+                let callback = Box::new(move |tick: TickData| match tick_tx_clone.try_send(tick) {
+                    Ok(()) => {}
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        warn!("Tick processing pipeline is full, dropping tick");
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        // Expected during shutdown; the receiver has already been dropped.
+                    }
                 });
 
                 // Start subscription with shutdown signal
