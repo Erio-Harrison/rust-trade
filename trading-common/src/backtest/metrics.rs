@@ -128,18 +128,24 @@ impl BacktestMetrics {
         mean_excess_return / tracking_error
     }
 
-    /// Calculate win rate (percentage of profitable trades)
+    /// Calculate win rate: the percentage of *closed* trades (those carrying a
+    /// realized P&L) that were profitable.
+    ///
+    /// Opening buys have no realized P&L and are not part of the denominator;
+    /// counting them would cap the win rate at 50% for a plain
+    /// buy-then-sell strategy no matter how good its exits were.
     pub fn calculate_win_rate(trades: &[crate::backtest::portfolio::Trade]) -> Decimal {
-        if trades.is_empty() {
+        let closed: Vec<Decimal> = trades
+            .iter()
+            .filter_map(|trade| trade.realized_pnl)
+            .collect();
+        if closed.is_empty() {
             return Decimal::ZERO;
         }
 
-        let profitable_trades = trades
-            .iter()
-            .filter(|trade| trade.realized_pnl.map_or(false, |pnl| pnl > Decimal::ZERO))
-            .count();
+        let profitable = closed.iter().filter(|pnl| **pnl > Decimal::ZERO).count();
 
-        Decimal::from(profitable_trades) / Decimal::from(trades.len()) * Decimal::from(100)
+        Decimal::from(profitable) / Decimal::from(closed.len()) * Decimal::from(100)
     }
 
     /// Calculate profit factor (total profit / total loss).

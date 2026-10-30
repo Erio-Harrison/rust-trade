@@ -1,6 +1,5 @@
 use crate::backtest::{metrics::BacktestMetrics, portfolio::Portfolio, strategy::Strategy};
 use crate::data::types::TickData;
-use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -352,14 +351,29 @@ impl BacktestResult {
         println!("Total Trades: {}", self.total_trades);
 
         if self.total_trades > 0 {
+            // Percentages are over closed trades only; opening buys have no outcome.
+            let closed_trades = self
+                .trades
+                .iter()
+                .filter(|trade| trade.realized_pnl.is_some())
+                .count();
+            let pct_of_closed = |n: usize| {
+                if closed_trades == 0 {
+                    0.0
+                } else {
+                    n as f64 / closed_trades as f64 * 100.0
+                }
+            };
+            println!("Closed Trades: {}", closed_trades);
             println!(
                 "Winning Trades: {} ({:.1}%)",
-                self.winning_trades, self.win_rate
+                self.winning_trades,
+                pct_of_closed(self.winning_trades)
             );
             println!(
                 "Losing Trades: {} ({:.1}%)",
                 self.losing_trades,
-                100.0 - self.win_rate.to_f64().unwrap_or(0.0)
+                pct_of_closed(self.losing_trades)
             );
             match self.profit_factor {
                 Some(pf) => println!("Profit Factor: {:.2}", pf),
