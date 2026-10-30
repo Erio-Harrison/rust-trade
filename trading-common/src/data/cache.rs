@@ -1,10 +1,10 @@
 use async_trait::async_trait;
-use redis::{Client as RedisClient, Commands, Connection};
+use redis::aio::ConnectionManager;
+use redis::{AsyncCommands, Client as RedisClient};
 use serde_json;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
 use tracing::{debug, error, warn};
 
 use super::types::{DataError, DataResult, TickData};
@@ -193,11 +193,16 @@ impl TickDataCache for InMemoryTickCache {
 // Redis Cache Implementation
 // =================================================================
 
-/// Redis cache implementation
+/// Redis cache implementation.
+///
+/// Uses `ConnectionManager`, an async, auto-reconnecting, cheaply-`Clone`
+/// connection — multiple calls can be in flight concurrently without a
+/// mutex serializing them, and the calls themselves no longer block a tokio
+/// worker thread the way the old synchronous `redis::Commands` API did.
 pub struct RedisTickCache {
     #[allow(dead_code)] // Keep client alive to maintain connection
     client: RedisClient,
-    connection: Arc<Mutex<Connection>>,
+    connection: ConnectionManager,
     max_ticks_per_symbol: usize,
     ttl_seconds: u64,
 }
@@ -212,14 +217,15 @@ impl RedisTickCache {
             .map_err(|e| DataError::Cache(format!("Failed to create Redis client: {}", e)))?;
 
         let connection = client
-            .get_connection()
+            .get_connection_manager()
+            .await
             .map_err(|e| DataError::Cache(format!("Failed to connect to Redis: {}", e)))?;
 
         debug!("Connected to Redis at: {}", redis_url);
 
         Ok(Self {
             client,
-            connection: Arc::new(Mutex::new(connection)),
+            connection,
             max_ticks_per_symbol,
             ttl_seconds,
         })
@@ -237,22 +243,21 @@ impl TickDataCache for RedisTickCache {
         let tick_json = serde_json::to_string(tick)
             .map_err(|e| DataError::Cache(format!("Failed to serialize tick: {}", e)))?;
 
-        let mut conn = self.connection.lock().await;
+        let mut conn = self.connection.clone();
 
-        // Use LPUSH to add to list head (latest first)
-        let _: () = conn
+        // LPUSH + LTRIM + EXPIRE used to be three separate round-trips to
+        // Redis (blocking ones, on top of that). A pipeline sends all three
+        // commands in one round-trip.
+        let _: () = redis::pipe()
             .lpush(&key, &tick_json)
-            .map_err(|e| DataError::Cache(format!("Redis LPUSH failed: {}", e)))?;
-
-        // Limit list length
-        let _: () = conn
+            .ignore()
             .ltrim(&key, 0, self.max_ticks_per_symbol as isize - 1)
-            .map_err(|e| DataError::Cache(format!("Redis LTRIM failed: {}", e)))?;
-
-        // Set TTL
-        let _: () = conn
+            .ignore()
             .expire(&key, self.ttl_seconds as usize)
-            .map_err(|e| DataError::Cache(format!("Redis EXPIRE failed: {}", e)))?;
+            .ignore()
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| DataError::Cache(format!("Redis pipeline failed: {}", e)))?;
 
         debug!(
             "Added tick to Redis cache: symbol={}, price={}",
@@ -263,11 +268,12 @@ impl TickDataCache for RedisTickCache {
 
     async fn get_recent_ticks(&self, symbol: &str, limit: usize) -> DataResult<Vec<TickData>> {
         let key = self.get_cache_key(symbol);
-        let mut conn = self.connection.lock().await;
+        let mut conn = self.connection.clone();
 
         // Use LRANGE to get latest N records
         let tick_jsons: Vec<String> = conn
             .lrange(&key, 0, limit as isize - 1)
+            .await
             .map_err(|e| DataError::Cache(format!("Redis LRANGE failed: {}", e)))?;
 
         let mut ticks = Vec::with_capacity(tick_jsons.len());
@@ -290,10 +296,11 @@ impl TickDataCache for RedisTickCache {
     }
 
     async fn get_symbols(&self) -> DataResult<Vec<String>> {
-        let mut conn = self.connection.lock().await;
+        let mut conn = self.connection.clone();
 
         let keys: Vec<String> = conn
             .keys("tick:*")
+            .await
             .map_err(|e| DataError::Cache(format!("Redis KEYS failed: {}", e)))?;
 
         let symbols: Vec<String> = keys
@@ -312,10 +319,11 @@ impl TickDataCache for RedisTickCache {
 
     async fn clear_symbol(&self, symbol: &str) -> DataResult<()> {
         let key = self.get_cache_key(symbol);
-        let mut conn = self.connection.lock().await;
+        let mut conn = self.connection.clone();
 
         let _: () = conn
             .del(&key)
+            .await
             .map_err(|e| DataError::Cache(format!("Redis DEL failed: {}", e)))?;
 
         debug!("Cleared Redis cache for symbol: {}", symbol);
