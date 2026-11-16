@@ -60,9 +60,8 @@ jobs:
           PGPASSWORD=trading psql -h localhost -U trading -d trading_core -f config/schema.sql
           PGPASSWORD=trading psql -h localhost -U trading -d trading_core -f config/live_strategy_log.sql
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+      - name: Install Rust toolchain from rust-toolchain.toml
+        run: rustup toolchain install && rustc --version
 
       - uses: Swatinem/rust-cache@v2
 
