@@ -69,13 +69,13 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: cargo check
-        run: cargo check --workspace
+        run: cargo check --workspace --locked
 
       - name: cargo clippy
-        run: cargo clippy --workspace --all-targets
+        run: cargo clippy --workspace --all-targets --locked
 
       - name: cargo test
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
   frontend:
     runs-on: ubuntu-latest
