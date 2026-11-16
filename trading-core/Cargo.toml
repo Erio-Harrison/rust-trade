@@ -8,7 +8,6 @@ trading-common = { path = "../trading-common" }
 tokio = { version = "1.0", features = ["full"] }
 tokio-tungstenite = { version = "0.20", features = ["native-tls"] }
 futures-util = "0.3"
-reqwest = { version = "0.11", features = ["json", "blocking"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "chrono", "rust_decimal"] }
 rust_decimal = { version = "1.32", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -18,12 +17,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dotenv = "0.15"
 chrono = { version = "0.4.35", features = ["serde"] }
-uuid = { version = "1.0", features = ["serde", "v4"] }
-anyhow = "1.0"
 thiserror = "1.0"
 async-trait = "0.1"
-clap = { version = "4.4", features = ["derive"] }
-rust_decimal_macros = "1.8"
 redis = "0.23.0" 
 
 [dev-dependencies]
