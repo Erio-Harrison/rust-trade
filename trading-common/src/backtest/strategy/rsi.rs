@@ -1,15 +1,64 @@
 use super::base::{Signal, Strategy};
 use crate::data::types::{OHLCData, TickData, Timeframe};
-use fin_primitives::signals::indicators::Rsi;
-use fin_primitives::signals::{BarInput, Signal as _};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
+
+/// Wilder's smoothed RSI (the TA-Lib / TradingView definition): the averages
+/// are seeded with the plain mean of the first `period` changes, then smoothed
+/// with `avg = (prev * (n - 1) + current) / n`.
+#[derive(Debug, Clone)]
+struct WilderRsi {
+    period: usize,
+    prev: Option<Decimal>,
+    seen: usize,
+    avg_gain: Decimal,
+    avg_loss: Decimal,
+}
+
+impl WilderRsi {
+    fn new(period: usize) -> Self {
+        Self {
+            period,
+            prev: None,
+            seen: 0,
+            avg_gain: Decimal::ZERO,
+            avg_loss: Decimal::ZERO,
+        }
+    }
+
+    fn update(&mut self, price: Decimal) -> Option<Decimal> {
+        let prev = self.prev.replace(price)?;
+        let change = price - prev;
+        let (gain, loss) = (change.max(Decimal::ZERO), (-change).max(Decimal::ZERO));
+        let n = Decimal::from(self.period);
+        if self.seen < self.period {
+            self.avg_gain += gain;
+            self.avg_loss += loss;
+            self.seen += 1;
+            if self.seen < self.period {
+                return None;
+            }
+            self.avg_gain /= n;
+            self.avg_loss /= n;
+        } else {
+            self.avg_gain = (self.avg_gain * (n - Decimal::ONE) + gain) / n;
+            self.avg_loss = (self.avg_loss * (n - Decimal::ONE) + loss) / n;
+        }
+        if self.avg_loss.is_zero() {
+            return Some(Decimal::ONE_HUNDRED);
+        }
+        Some(
+            Decimal::ONE_HUNDRED
+                - Decimal::ONE_HUNDRED / (Decimal::ONE + self.avg_gain / self.avg_loss),
+        )
+    }
+}
 
 pub struct RsiStrategy {
     period: usize,
     oversold: Decimal,
     overbought: Decimal,
-    rsi: Rsi,
+    rsi: WilderRsi,
     in_position: bool,
 }
 
@@ -19,7 +68,7 @@ impl RsiStrategy {
             period: 14,
             oversold: Decimal::from(30),
             overbought: Decimal::from(70),
-            rsi: Rsi::new("rsi", 14).expect("default RSI period is non-zero"),
+            rsi: WilderRsi::new(14),
             in_position: false,
         }
     }
@@ -27,10 +76,7 @@ impl RsiStrategy {
     /// Feeds one close into Wilder's RSI (the TA-Lib / TradingView definition).
     /// Returns `None` until `period` price changes have been seen.
     fn update_rsi(&mut self, price: Decimal) -> Option<Decimal> {
-        self.rsi
-            .update(&BarInput::from_close(price))
-            .ok()
-            .and_then(|value| value.as_decimal())
+        self.rsi.update(price)
     }
 }
 
@@ -53,7 +99,10 @@ impl Strategy for RsiStrategy {
         if self.oversold >= self.overbought {
             return Err("Oversold level must be less than overbought level".to_string());
         }
-        self.rsi = Rsi::new("rsi", self.period).map_err(|_| "Period must be greater than 0")?;
+        if self.period == 0 {
+            return Err("Period must be greater than 0".to_string());
+        }
+        self.rsi = WilderRsi::new(self.period);
 
         println!(
             "RSI Strategy initialized: period={}, oversold={}, overbought={}",
@@ -63,7 +112,7 @@ impl Strategy for RsiStrategy {
     }
 
     fn reset(&mut self) {
-        self.rsi.reset();
+        self.rsi = WilderRsi::new(self.period);
         self.in_position = false;
     }
 
@@ -165,5 +214,26 @@ mod tests {
         let mut strategy = RsiStrategy::new();
         let params = HashMap::from([("period".to_string(), "0".to_string())]);
         assert!(strategy.initialize(params).is_err());
+    }
+
+    #[test]
+    fn matches_stockcharts_reference_series() {
+        // The 14-period example from StockCharts (also used by TA-Lib's tests).
+        let closes = [
+            "44.34", "44.09", "44.15", "43.61", "44.33", "44.83", "45.10", "45.42", "45.84",
+            "46.08", "45.89", "46.03", "45.61", "46.28", "46.28", "46.00", "46.03", "46.41",
+            "46.22", "45.64",
+        ];
+        let mut strategy = strategy("14");
+        let values: Vec<Decimal> = closes
+            .iter()
+            .filter_map(|c| strategy.update_rsi(c.parse().unwrap()))
+            .map(|rsi| rsi.round_dp(2))
+            .collect();
+        let expected: Vec<Decimal> = ["70.46", "66.25", "66.48", "69.35", "66.29", "57.92"]
+            .iter()
+            .map(|v| v.parse().unwrap())
+            .collect();
+        assert_eq!(values, expected);
     }
 }
